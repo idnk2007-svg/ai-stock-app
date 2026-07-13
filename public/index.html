@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 株価予想ダッシュボード</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', 'Noto Sans JP', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        .loader { border-top-color: #3b82f6; animation: spinner 1.5s linear infinite; }
+        @keyframes spinner { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center pt-8 pb-12 px-4 sm:px-6 lg:px-8">
+
+    <div class="w-full max-w-6xl space-y-6">
+        <div class="flex flex-col md:flex-row justify-between items-center gap-4 bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
+            <div class="flex items-center gap-3">
+                <div class="p-3 bg-blue-600 rounded-xl shadow-lg shadow-blue-500/30">
+                    <i class="fa-solid fa-chart-line text-2xl text-white"></i>
+                </div>
+                <div>
+                    <h1 class="text-2xl font-bold text-white tracking-tight">AI 株価予想アナライザ</h1>
+                    <p class="text-slate-400 text-sm">企業名や証券コードから最新の動向をAIが分析</p>
+                </div>
+            </div>
+
+            <form id="searchForm" class="w-full md:w-auto flex gap-2">
+                <div class="relative w-full md:w-80">
+                    <input type="text" id="searchInput" placeholder="例: トヨタ, 7203, ソニー" required
+                        class="w-full pl-4 pr-4 py-3 bg-slate-900 border border-slate-600 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+                </div>
+                <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-medium transition-colors shadow-lg shadow-blue-600/20 whitespace-nowrap">
+                    分析
+                </button>
+            </form>
+        </div>
+
+        <div id="searchHistory" class="flex flex-wrap gap-2 px-2 hidden"></div>
+
+        <div id="loadingState" class="hidden flex-col items-center justify-center py-20">
+            <div class="loader ease-linear rounded-full border-4 border-t-4 border-slate-700 h-16 w-16 mb-4"></div>
+            <h2 class="text-xl font-semibold text-white mb-2">AIが市場データを分析中...</h2>
+            <p class="text-slate-400 text-sm">最新のニュースと指標を取得しています</p>
+        </div>
+        
+        <div id="errorState" class="hidden bg-red-900/30 border border-red-500/50 p-6 rounded-2xl text-center">
+            <p id="errorMessage" class="text-red-200">エラーが発生しました。</p>
+        </div>
+
+        <div id="resultsDashboard" class="hidden grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-1 space-y-6">
+                <div class="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700 relative overflow-hidden">
+                    <h2 id="companyName" class="text-2xl font-bold text-white relative z-10">---</h2>
+                    <p id="companyCode" class="text-blue-400 font-semibold text-sm mb-4 relative z-10">---</p>
+                    <div class="text-4xl font-bold text-white mb-2 relative z-10" id="currentPrice">--- <span class="text-xl text-slate-400">円</span></div>
+                    <div id="priceChangeContainer" class="flex items-center gap-2 font-medium relative z-10">
+                        <i id="priceChangeIcon" class="fa-solid"></i>
+                        <span id="priceChange">---</span>
+                    </div>
+                </div>
+
+                <div class="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
+                    <h3 class="text-xs font-bold text-slate-400 mb-4 uppercase tracking-wider">AI 売買シグナル指数</h3>
+                    <div class="flex justify-between items-end mb-2">
+                        <span id="signalLabel" class="text-xl font-bold">---</span>
+                        <span id="signalValue" class="text-3xl font-bold text-white">--</span>
+                    </div>
+                    <div class="relative h-4 bg-slate-900 rounded-full overflow-hidden border border-slate-700 shadow-inner">
+                        <div class="absolute inset-0 bg-gradient-to-r from-red-500 via-yellow-500 to-emerald-500 opacity-80"></div>
+                        <div id="signalPointer" class="absolute top-0 bottom-0 w-1.5 bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)] transition-all duration-1000 ease-out" style="left: 50%;"></div>
+                    </div>
+                    <div class="flex justify-between text-[10px] text-slate-500 font-medium mt-1">
+                        <span>0 (強い売り)</span>
+                        <span>50 (中立)</span>
+                        <span>100 (強い買い)</span>
+                    </div>
+                </div>
+
+                <!-- Volatility / Risk Card -->
+                <div class="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
+                    <h3 class="text-xs font-bold text-slate-400 mb-4 uppercase tracking-wider">価格変動リスク (ボラティリティ)</h3>
+                    <div class="flex justify-between items-end mb-2">
+                        <span id="volatilityLabel" class="text-xl font-bold text-slate-300">---</span>
+                        <span id="volatilityValue" class="text-3xl font-bold text-white">--</span>
+                    </div>
+                    <div class="relative h-4 bg-slate-900 rounded-full overflow-hidden border border-slate-700 shadow-inner">
+                        <!-- 安定(青) -> 普通(黄) -> 高リスク(赤) のグラデーション -->
+                        <div class="absolute inset-0 bg-gradient-to-r from-blue-500 via-yellow-500 to-red-500 opacity-80"></div>
+                        <div id="volatilityPointer" class="absolute top-0 bottom-0 w-1.5 bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)] transition-all duration-1000 ease-out" style="left: 50%;"></div>
+                    </div>
+                    <div class="flex justify-between text-[10px] text-slate-500 font-medium mt-1">
+                        <span>0 (安定)</span>
+                        <span>50 (普通)</span>
+                        <span>100 (高リスク)</span>
+                    </div>
+                </div>
+
+                <!-- Industry Growth Card -->
+                <div class="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
+                    <h3 class="text-xs font-bold text-slate-400 mb-4 uppercase tracking-wider">業界の将来成長性</h3>
+                    <div class="flex justify-between items-end mb-2">
+                        <span id="growthLabel" class="text-xl font-bold text-slate-300">---</span>
+                        <span id="growthValue" class="text-3xl font-bold text-white">--</span>
+                    </div>
+                    <div class="relative h-4 bg-slate-900 rounded-full overflow-hidden border border-slate-700 shadow-inner">
+                        <!-- 衰退(赤) -> 安定(黄) -> 成長(緑) のグラデーション -->
+                        <div class="absolute inset-0 bg-gradient-to-r from-red-500 via-yellow-500 to-emerald-500 opacity-80"></div>
+                        <div id="growthPointer" class="absolute top-0 bottom-0 w-1.5 bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)] transition-all duration-1000 ease-out" style="left: 50%;"></div>
+                    </div>
+                    <div class="flex justify-between text-[10px] text-slate-500 font-medium mt-1">
+                        <span>0 (衰退懸念)</span>
+                        <span>50 (安定)</span>
+                        <span>100 (急成長)</span>
+                    </div>
+                </div>
+
+                <div class="bg-slate-800 p-5 rounded-2xl shadow-lg border border-slate-700">
+                    <h3 class="text-xs font-bold text-slate-400 mb-3 uppercase tracking-wider">主要指標 (参考値)</h3>
+                    <div class="grid grid-cols-3 gap-2 text-center divide-x divide-slate-700">
+                        <div class="flex flex-col items-center">
+                            <p class="text-xs text-slate-500 mb-1">PER</p>
+                            <p id="fundPer" class="text-base font-semibold text-white mb-2">---</p>
+                            <span id="fundPerEval" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-300">---</span>
+                        </div>
+                        <div class="flex flex-col items-center">
+                            <p class="text-xs text-slate-500 mb-1">PBR</p>
+                            <p id="fundPbr" class="text-base font-semibold text-white mb-2">---</p>
+                            <span id="fundPbrEval" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-300">---</span>
+                        </div>
+                        <div class="flex flex-col items-center">
+                            <p class="text-xs text-slate-500 mb-1">配当利回り</p>
+                            <p id="fundYield" class="text-base font-semibold text-white mb-2">---</p>
+                            <span id="fundYieldEval" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-300">---</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="lg:col-span-2 space-y-6">
+                
+                <!-- External Chart Link Card -->
+                <div class="bg-slate-800 p-8 rounded-2xl shadow-lg border border-slate-700 flex flex-col items-center justify-center text-center">
+                    <div class="p-4 bg-slate-900 rounded-full text-blue-500 mb-4 shadow-inner">
+                        <i class="fa-solid fa-chart-pie text-4xl"></i>
+                    </div>
+                    <h3 class="text-xl font-bold text-white mb-2">詳細な株価チャート</h3>
+                    <p class="text-slate-400 text-sm mb-6 max-w-md">
+                        より詳細な値動き、ローソク足、テクニカル分析は、専門のチャートツールでご確認ください。
+                    </p>
+                    <a id="externalChartLink" href="#" target="_blank" class="inline-flex items-center justify-center px-8 py-3 text-sm font-medium rounded-xl text-white bg-blue-600 hover:bg-blue-700 shadow-lg shadow-blue-600/30 transition-all transform hover:-translate-y-0.5">
+                        TradingViewでチャートを開く <i class="fa-solid fa-arrow-up-right-from-square ml-2"></i>
+                    </a>
+                </div>
+
+                <div class="bg-gradient-to-br from-indigo-900/50 to-purple-900/50 p-6 rounded-2xl shadow-lg border border-indigo-500/30">
+                    <div class="flex items-center gap-2 mb-4">
+                        <i class="fa-solid fa-robot text-indigo-400 text-xl"></i>
+                        <h3 class="text-lg font-bold text-indigo-100">AI 動向予測</h3>
+                    </div>
+                    <p id="aiAnalysis" class="text-indigo-200/90 leading-relaxed text-sm mb-4"></p>
+                    <div class="pt-4 border-t border-indigo-500/30">
+                        <div class="flex items-center gap-2 mb-2">
+                            <i class="fa-solid fa-triangle-exclamation text-yellow-500 text-sm"></i>
+                            <h4 class="text-sm font-bold text-indigo-100">懸念材料・リスク</h4>
+                        </div>
+                        <p id="riskFactor" class="text-indigo-200/80 text-xs leading-relaxed"></p>
+                    </div>
+                </div>
+
+                <div class="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
+                    <h3 class="text-lg font-bold text-white mb-4">関連ニュース</h3>
+                    <div id="newsContainer" class="space-y-4"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 設定事項 ---
+        const API_KEY = ""; 
+        
+        // DOM Elements
+        const searchForm = document.getElementById('searchForm');
+        const searchInput = document.getElementById('searchInput');
+        const loadingState = document.getElementById('loadingState');
+        const errorState = document.getElementById('errorState');
+        const errorMessage = document.getElementById('errorMessage');
+        const resultsDashboard = document.getElementById('resultsDashboard');
+        const searchHistoryEl = document.getElementById('searchHistory');
+
+        let currentTickerCode = null;
+        let searchHistory = JSON.parse(localStorage.getItem('stockSearchHistory') || '[]');
+
+        // --- 検索履歴管理 ---
+        function renderHistory() {
+            if (searchHistory.length === 0) {
+                searchHistoryEl.classList.add('hidden');
+                return;
+            }
+            searchHistoryEl.classList.remove('hidden');
+            searchHistoryEl.innerHTML = '<span class="text-slate-400 text-sm py-1">最近の検索:</span>';
+            searchHistory.forEach(query => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full border border-slate-600 transition-colors whitespace-nowrap';
+                btn.textContent = query;
+                btn.onclick = () => {
+                    searchInput.value = query;
+                    searchForm.dispatchEvent(new Event('submit'));
+                };
+                searchHistoryEl.appendChild(btn);
+            });
+        }
+        renderHistory();
+
+        function addToHistory(name) {
+            if (!searchHistory.includes(name)) {
+                searchHistory.unshift(name);
+                if (searchHistory.length > 6) searchHistory.pop();
+                localStorage.setItem('stockSearchHistory', JSON.stringify(searchHistory));
+                renderHistory();
+            }
+        }
+
+        // --- AIデータ取得 (ニュース・分析等) ---
+        searchForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const query = searchInput.value.trim();
+            if (!query) return;
+
+            loadingState.classList.remove('hidden');
+            resultsDashboard.classList.add('hidden');
+            errorState.classList.add('hidden');
+
+            try {
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${API_KEY}`;
+                
+                const promptText = `
+                    ユーザーが日本の株式「${query}」について検索しました。
+                    Google検索を用いて、「最新の株価」「最新の関連ニュース」「主要指標(PER, PBR, 配当利回り)」を取得してください。
+                    主要指標について、PERとPBRは「割安」「適正」「割高」のいずれか、配当利回りは「高い」「適正」「低い」のいずれかで評価してください。
+                    総合的に分析し、今後の株価動向の予想と、「買い時・売り時」を示す0〜100の指数、そのラベル（強い買い, 買い, 中立, 売り, 強い売り）、リスク要因を挙げてください。
+                    さらに、直近の価格変動（ボラティリティ）や市場の不確実性を評価し、0〜100の『価格変動リスク指数』（0=非常に安定、50=普通、100=非常に変動が激しく高リスク）と、そのラベル（例: '安定', 'やや安定', '普通', 'やや高い', '高い'）を算出してください。
+                    最後に、その企業が属する業界や主要ビジネス（職種）が今後伸びるのか減少していくのかを評価し、0〜100の『業界将来性指数』（0=強い衰退懸念、50=現状維持・安定、100=高い成長性）と、そのラベル（例: '衰退懸念', '停滞', '安定', '成長期待', '急成長'）を算出してください。
+                    必ず以下のJSONスキーマに従って出力してください。
+                `;
+
+                const payload = {
+                    contents: [{ parts: [{ text: promptText }] }],
+                    tools: [{ google_search: {} }],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: "OBJECT",
+                            properties: {
+                                "companyName": { type: "STRING" },
+                                "tickerCode": { type: "STRING", description: "4桁の数字の証券コード" },
+                                "currentPrice": { type: "NUMBER" },
+                                "changeText": { type: "STRING" },
+                                "isPositive": { type: "BOOLEAN" },
+                                "tradingSignal": { type: "NUMBER" },
+                                "tradingSignalLabel": { type: "STRING" },
+                                "volatilityIndex": { type: "NUMBER", description: "価格変動リスクを示す0〜100の整数" },
+                                "volatilityLabel": { type: "STRING", description: "ボラティリティの評価ラベル" },
+                                "industryGrowthIndex": { type: "NUMBER", description: "業界の将来成長性を示す0〜100の整数" },
+                                "industryGrowthLabel": { type: "STRING", description: "将来成長性の評価ラベル" },
+                                "news": {
+                                    type: "ARRAY",
+                                    items: {
+                                        type: "OBJECT",
+                                        properties: {
+                                            "title": { type: "STRING" },
+                                            "url": { type: "STRING" },
+                                            "source": { type: "STRING" }
+                                        }
+                                    }
+                                },
+                                "fundamentals": {
+                                    type: "OBJECT",
+                                    properties: {
+                                        "per": { type: "STRING" },
+                                        "perEvaluation": { type: "STRING" },
+                                        "pbr": { type: "STRING" },
+                                        "pbrEvaluation": { type: "STRING" },
+                                        "dividendYield": { type: "STRING" },
+                                        "yieldEvaluation": { type: "STRING" }
+                                    }
+                                },
+                                "analysis": { type: "STRING" },
+                                "riskFactor": { type: "STRING" }
+                            },
+                            required: ["companyName", "tickerCode", "currentPrice", "changeText", "isPositive", "tradingSignal", "tradingSignalLabel", "volatilityIndex", "volatilityLabel", "industryGrowthIndex", "industryGrowthLabel", "news", "fundamentals", "analysis", "riskFactor"]
+                        }
+                    }
+                };
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) throw new Error(`APIリクエスト失敗: ${response.status}`);
+                const result = await response.json();
+                
+                let parsedData;
+                try {
+                    parsedData = JSON.parse(result.candidates[0].content.parts[0].text);
+                } catch(e) {
+                    throw new Error("AIが正しいJSONデータを返しませんでした。");
+                }
+
+                updateDashboard(parsedData);
+                addToHistory(parsedData.companyName);
+                
+                loadingState.classList.add('hidden');
+                resultsDashboard.classList.remove('hidden');
+
+            } catch (err) {
+                loadingState.classList.add('hidden');
+                showError(err.message);
+            }
+        });
+
+        function showError(msg) {
+            errorMessage.textContent = msg;
+            errorState.classList.remove('hidden');
+        }
+
+        // --- ダッシュボード反映 ---
+        function updateDashboard(data) {
+            // 不要な文字を削除し、確実に4桁の数字のみにする
+            const cleanTickerCode = (data.tickerCode || '').replace(/[^0-9]/g, '');
+            currentTickerCode = cleanTickerCode;
+            const currentStockPrice = data.currentPrice || 0;
+            const currentStockIsPositive = !!data.isPositive;
+
+            document.getElementById('companyName').textContent = data.companyName;
+            document.getElementById('companyCode').textContent = cleanTickerCode ? `${cleanTickerCode}.T` : '---';
+            document.getElementById('currentPrice').textContent = currentStockPrice.toLocaleString();
+            
+            const changeContainer = document.getElementById('priceChangeContainer');
+            const changeIcon = document.getElementById('priceChangeIcon');
+            document.getElementById('priceChange').textContent = data.changeText;
+
+            if (currentStockIsPositive) {
+                changeContainer.className = "flex items-center gap-2 font-medium relative z-10 text-emerald-400";
+                changeIcon.className = "fa-solid fa-arrow-trend-up";
+            } else {
+                changeContainer.className = "flex items-center gap-2 font-medium relative z-10 text-red-400";
+                changeIcon.className = "fa-solid fa-arrow-trend-down";
+            }
+
+            document.getElementById('signalValue').textContent = data.tradingSignal;
+            document.getElementById('signalLabel').textContent = data.tradingSignalLabel;
+            document.getElementById('signalPointer').style.left = `${data.tradingSignal}%`;
+
+            // Volatility / Risk Indicator
+            document.getElementById('volatilityValue').textContent = data.volatilityIndex;
+            document.getElementById('volatilityLabel').textContent = data.volatilityLabel;
+            document.getElementById('volatilityPointer').style.left = `${data.volatilityIndex}%`;
+
+            // Industry Growth Indicator
+            document.getElementById('growthValue').textContent = data.industryGrowthIndex;
+            document.getElementById('growthLabel').textContent = data.industryGrowthLabel;
+            document.getElementById('growthPointer').style.left = `${data.industryGrowthIndex}%`;
+
+            const getEvalColorClass = (evalText, type) => {
+                if (evalText === '割安' || (type === 'yield' && evalText === '高い')) return 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+                if (evalText === '割高' || (type === 'yield' && evalText === '低い')) return 'bg-red-500/20 text-red-400 border border-red-500/30';
+                if (evalText === '適正') return 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30';
+                return 'bg-slate-700 text-slate-300 border border-transparent';
+            };
+
+            const perEl = document.getElementById('fundPerEval');
+            perEl.textContent = data.fundamentals?.perEvaluation || '-';
+            perEl.className = `text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap transition-colors ${getEvalColorClass(perEl.textContent, 'per')}`;
+            document.getElementById('fundPer').textContent = data.fundamentals?.per || '---';
+            
+            const pbrEl = document.getElementById('fundPbrEval');
+            pbrEl.textContent = data.fundamentals?.pbrEvaluation || '-';
+            pbrEl.className = `text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap transition-colors ${getEvalColorClass(pbrEl.textContent, 'pbr')}`;
+            document.getElementById('fundPbr').textContent = data.fundamentals?.pbr || '---';
+
+            const yieldEl = document.getElementById('fundYieldEval');
+            yieldEl.textContent = data.fundamentals?.yieldEvaluation || '-';
+            yieldEl.className = `text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap transition-colors ${getEvalColorClass(yieldEl.textContent, 'yield')}`;
+            document.getElementById('fundYield').textContent = data.fundamentals?.dividendYield || '---';
+
+            document.getElementById('aiAnalysis').textContent = data.analysis;
+            document.getElementById('riskFactor').textContent = data.riskFactor || '-';
+
+            // ニュースの描画
+            const newsContainer = document.getElementById('newsContainer');
+            newsContainer.innerHTML = '';
+            if (data.news && data.news.length > 0) {
+                data.news.forEach(news => {
+                    const el = document.createElement('a');
+                    el.href = news.url;
+                    el.target = "_blank";
+                    el.className = "block p-4 rounded-xl bg-slate-900 border border-slate-700 hover:border-blue-500/50 transition-colors group";
+                    el.innerHTML = `
+                        <h4 class="text-sm font-bold text-slate-200 group-hover:text-blue-400 transition-colors line-clamp-2 mb-2">${news.title}</h4>
+                        <div class="flex justify-between items-center text-xs text-slate-500">
+                            <span><i class="fa-regular fa-newspaper mr-1"></i>${news.source}</span>
+                            <i class="fa-solid fa-arrow-right opacity-0 group-hover:opacity-100 transition-opacity"></i>
+                        </div>`;
+                    newsContainer.appendChild(el);
+                });
+            }
+
+            // TradingViewリンクの更新
+            const chartLink = document.getElementById('externalChartLink');
+            if (currentTickerCode) {
+                chartLink.href = `https://jp.tradingview.com/symbols/TSE-${currentTickerCode}/`;
+                chartLink.classList.remove('hidden');
+            } else {
+                chartLink.classList.add('hidden');
+            }
+        }
+    </script>
+</body>
+</html>
