@@ -272,13 +272,21 @@
         // --- ダッシュボード反映 ---
         function updateDashboard(data) {
             // 不要な文字を削除し、確実に4桁の数字のみにする
-            const cleanTickerCode = (data.tickerCode || '').replace(/[^0-9]/g, '');
+            // 修正: 数字だけでなくアルファベットも含めるように変更 (例: 130A, AAPL等に対応)
+            const cleanTickerCode = (data.tickerCode || '').toString().replace(/[^0-9A-Za-z]/g, '').toUpperCase();
             currentTickerCode = cleanTickerCode;
             const currentStockPrice = data.currentPrice || 0;
             const currentStockIsPositive = !!data.isPositive;
 
             document.getElementById('companyName').textContent = data.companyName;
-            document.getElementById('companyCode').textContent = cleanTickerCode ? `${cleanTickerCode}.T` : '---';
+            
+            // 修正: 日本株(4文字)の場合は.Tを付ける、それ以外はそのまま表示
+            if (/^[0-9][0-9A-Z]{3}$/.test(cleanTickerCode)) {
+                document.getElementById('companyCode').textContent = cleanTickerCode ? `${cleanTickerCode}.T` : '---';
+            } else {
+                document.getElementById('companyCode').textContent = cleanTickerCode || '---';
+            }
+            
             document.getElementById('currentPrice').textContent = currentStockPrice.toLocaleString();
             
             const changeContainer = document.getElementById('priceChangeContainer');
@@ -354,7 +362,12 @@
             // TradingViewリンクの更新
             const chartLink = document.getElementById('externalChartLink');
             if (currentTickerCode) {
-                chartLink.href = `https://jp.tradingview.com/symbols/TSE-${currentTickerCode}/`;
+                // 修正: 日本株の場合はTSE-を付け、米国株等の場合はそのままURLに組み込む
+                if (/^[0-9][0-9A-Z]{3}$/.test(currentTickerCode)) {
+                    chartLink.href = `https://jp.tradingview.com/symbols/TSE-${currentTickerCode}/`;
+                } else {
+                    chartLink.href = `https://jp.tradingview.com/symbols/${currentTickerCode}/`;
+                }
                 chartLink.classList.remove('hidden');
             } else {
                 chartLink.classList.add('hidden');
