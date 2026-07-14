@@ -49,12 +49,10 @@ app.post('/api/analyze', async (req, res) => {
         const result = await model.generateContent(promptText);
         let text = result.response.text();
         
-        // 安全に記号を消す方法
-        text = text.split('
-```json').join('');
-        text = text.split('
-```').join('');
-        text = text.trim();
+        // 記号を使わず、最初から最後の { } までを抽出する安全な方法
+        const start = text.indexOf('{');
+        const end = text.lastIndexOf('}') + 1;
+        text = text.substring(start, end);
         
         res.json({ success: true, data: JSON.parse(text) });
 
