@@ -143,7 +143,6 @@
             </div>
 
             <div class="lg:col-span-2 space-y-6">
-                
                 <!-- External Chart Link Card -->
                 <div class="bg-slate-800 p-8 rounded-2xl shadow-lg border border-slate-700 flex flex-col items-center justify-center text-center">
                     <div class="p-4 bg-slate-900 rounded-full text-blue-500 mb-4 shadow-inner">
@@ -183,7 +182,7 @@
 
     <script>
         // --- 設定事項 ---
-        const API_KEY = ""; 
+        // ※フロントエンドからはAPIキーを完全に削除しました！安全です。
         
         // DOM Elements
         const searchForm = document.getElementById('searchForm');
@@ -228,7 +227,7 @@
             }
         }
 
-        // --- AIデータ取得 (ニュース・分析等) ---
+        // --- AIデータ取得 (自作バックエンドサーバーへ通信) ---
         searchForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const query = searchInput.value.trim();
@@ -239,82 +238,19 @@
             errorState.classList.add('hidden');
 
             try {
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${API_KEY}`;
-                
-                const promptText = `
-                    ユーザーが日本の株式「${query}」について検索しました。
-                    Google検索を用いて、「最新の株価」「最新の関連ニュース」「主要指標(PER, PBR, 配当利回り)」を取得してください。
-                    主要指標について、PERとPBRは「割安」「適正」「割高」のいずれか、配当利回りは「高い」「適正」「低い」のいずれかで評価してください。
-                    総合的に分析し、今後の株価動向の予想と、「買い時・売り時」を示す0〜100の指数、そのラベル（強い買い, 買い, 中立, 売り, 強い売り）、リスク要因を挙げてください。
-                    さらに、直近の価格変動（ボラティリティ）や市場の不確実性を評価し、0〜100の『価格変動リスク指数』（0=非常に安定、50=普通、100=非常に変動が激しく高リスク）と、そのラベル（例: '安定', 'やや安定', '普通', 'やや高い', '高い'）を算出してください。
-                    最後に、その企業が属する業界や主要ビジネス（職種）が今後伸びるのか減少していくのかを評価し、0〜100の『業界将来性指数』（0=強い衰退懸念、50=現状維持・安定、100=高い成長性）と、そのラベル（例: '衰退懸念', '停滞', '安定', '成長期待', '急成長'）を算出してください。
-                    必ず以下のJSONスキーマに従って出力してください。
-                `;
-
-                const payload = {
-                    contents: [{ parts: [{ text: promptText }] }],
-                    tools: [{ google_search: {} }],
-                    generationConfig: {
-                        responseMimeType: "application/json",
-                        responseSchema: {
-                            type: "OBJECT",
-                            properties: {
-                                "companyName": { type: "STRING" },
-                                "tickerCode": { type: "STRING", description: "4桁の数字の証券コード" },
-                                "currentPrice": { type: "NUMBER" },
-                                "changeText": { type: "STRING" },
-                                "isPositive": { type: "BOOLEAN" },
-                                "tradingSignal": { type: "NUMBER" },
-                                "tradingSignalLabel": { type: "STRING" },
-                                "volatilityIndex": { type: "NUMBER", description: "価格変動リスクを示す0〜100の整数" },
-                                "volatilityLabel": { type: "STRING", description: "ボラティリティの評価ラベル" },
-                                "industryGrowthIndex": { type: "NUMBER", description: "業界の将来成長性を示す0〜100の整数" },
-                                "industryGrowthLabel": { type: "STRING", description: "将来成長性の評価ラベル" },
-                                "news": {
-                                    type: "ARRAY",
-                                    items: {
-                                        type: "OBJECT",
-                                        properties: {
-                                            "title": { type: "STRING" },
-                                            "url": { type: "STRING" },
-                                            "source": { type: "STRING" }
-                                        }
-                                    }
-                                },
-                                "fundamentals": {
-                                    type: "OBJECT",
-                                    properties: {
-                                        "per": { type: "STRING" },
-                                        "perEvaluation": { type: "STRING" },
-                                        "pbr": { type: "STRING" },
-                                        "pbrEvaluation": { type: "STRING" },
-                                        "dividendYield": { type: "STRING" },
-                                        "yieldEvaluation": { type: "STRING" }
-                                    }
-                                },
-                                "analysis": { type: "STRING" },
-                                "riskFactor": { type: "STRING" }
-                            },
-                            required: ["companyName", "tickerCode", "currentPrice", "changeText", "isPositive", "tradingSignal", "tradingSignalLabel", "volatilityIndex", "volatilityLabel", "industryGrowthIndex", "industryGrowthLabel", "news", "fundamentals", "analysis", "riskFactor"]
-                        }
-                    }
-                };
-
-                const response = await fetch(apiUrl, {
+                // IMPORTANT: ここが新しい自作サーバーへの通信に変更されています！
+                const response = await fetch('/api/analyze', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify({ query: query })
                 });
 
-                if (!response.ok) throw new Error(`APIリクエスト失敗: ${response.status}`);
                 const result = await response.json();
+
+                if (!response.ok) throw new Error(`サーバーエラー: ${result.error || response.status}`);
                 
-                let parsedData;
-                try {
-                    parsedData = JSON.parse(result.candidates[0].content.parts[0].text);
-                } catch(e) {
-                    throw new Error("AIが正しいJSONデータを返しませんでした。");
-                }
+                // サーバーから安全にデータを受け取る
+                const parsedData = result.data;
 
                 updateDashboard(parsedData);
                 addToHistory(parsedData.companyName);
