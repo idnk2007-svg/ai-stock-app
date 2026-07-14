@@ -9,14 +9,14 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// 環境変数からAPIキーを読み込む
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 app.post('/api/analyze', async (req, res) => {
     const { query } = req.body;
     
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        // AIのモデル名を最新版（gemini-2.5-flash）に変更しました！
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         
         const promptText = `
             ユーザーが日本の株式「${query}」について検索しました。
@@ -50,12 +50,12 @@ app.post('/api/analyze', async (req, res) => {
         const result = await model.generateContent(promptText);
         let text = result.response.text();
         
-        // エラーを防ぐため、確実に { } の中身だけを抜き出す
+        // 記号を使わず、最初から最後の { } までを抽出する安全な方法
         const start = text.indexOf('{');
         const end = text.lastIndexOf('}') + 1;
-        const jsonString = text.substring(start, end);
+        text = text.substring(start, end);
         
-        res.json({ success: true, data: JSON.parse(jsonString) });
+        res.json({ success: true, data: JSON.parse(text) });
 
     } catch (err) {
         console.error("Analysis Error:", err);
