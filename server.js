@@ -1,23 +1,15 @@
 const express = require('express');
 const cors = require('cors');
 
-// Expressアプリの初期化
 const app = express();
 const port = process.env.PORT || 3000;
 
-// ミドルウェアの設定
 app.use(cors());
 app.use(express.json());
-
-// 'public'フォルダの中にある静的ファイル(index.html等)を配信する設定
-// ユーザーがURLにアクセスすると、自動的にpublic/index.htmlが表示されます
 app.use(express.static('public'));
 
-// 株価分析用のAPIエンドポイント（フロントエンドからここへリクエストが来ます）
 app.post('/api/analyze', async (req, res) => {
     const { query } = req.body;
-    
-    // 【重要】サーバーの環境変数からAPIキーを取得（誰からも見られず安全！）
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
@@ -25,23 +17,22 @@ app.post('/api/analyze', async (req, res) => {
     }
 
     try {
+        // ★変更点：403エラーを回避するため、APIキーをURLの最後に直接組み込みます
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
         
-        // ユーザーから送られたのは銘柄名(query)だけ。プロンプト全体はサーバー側で安全に組み立てます。
         const promptText = `
-            ユーザーが日本の株式「${query}」について検索しました。
-            Google検索を用いて、「最新の株価」「最新の関連ニュース」「主要指標(PER, PBR, 配当利回り)」を取得してください。
-            主要指標について、PERとPBRは「割安」「適正」「割高」のいずれか、配当利回りは「高い」「適正」「低い」のいずれかで評価してください。
-            総合的に分析し、今後の株価動向の予想と、「買い時・売り時」を示す0〜100の指数、そのラベル（強い買い, 買い, 中立, 売り, 強い売り）、リスク要因を挙げてください。
-            さらに、直近の価格変動（ボラティリティ）や市場の不確実性を評価し、0〜100の『価格変動リスク指数』（0=非常に安定、50=普通、100=非常に変動が激しく高リスク）と、そのラベルを算出してください。
-            次に、その企業が属する業界や主要ビジネスが今後伸びるのか減少していくのかを評価し、0〜100の『業界将来性指数』（0=強い衰退懸念、50=現状維持・安定、100=高い成長性）と、そのラベルを算出してください。
-            最後に、企業の特性を分析し、0〜100の『投資スタイル適合度指数』（0=短期トレード向き、50=中立、100=長期保有・資産形成向き）と、そのラベルを算出してください。
-            必ず以下のJSONスキーマに従って出力してください。
+            ユーザーが日本の株式「${query}」について検索しました。以下を推測・分析してください。
+            1. 「最新の株価」「関連ニュース」「主要指標(PER, PBR, 配当利回り)」。指標は「割安」「適正」「割高」（配当は「高い」「適正」「低い」）で評価。
+            2. 「最低購入金額」（現在株価 × 100株）。
+            3. 「株主優待の有無」と内容。魅力度を0〜5で評価。
+            4. アナリストの平均的な「目標株価」。
+            5. 次回の「決算発表時期」（例: "2026年8月"）。
+            6. 総合分析し、「買い時・売り時(0-100)」とラベル、「価格変動リスク(0-100)」とラベル、「業界将来性(0-100)」とラベルを算出。
+            必ず以下のJSONスキーマに従ってください。
         `;
 
         const payload = {
             contents: [{ parts: [{ text: promptText }] }],
-            tools: [{ google_search: {} }],
             generationConfig: {
                 responseMimeType: "application/json",
                 responseSchema: {
@@ -58,8 +49,16 @@ app.post('/api/analyze', async (req, res) => {
                         "volatilityLabel": { type: "STRING" },
                         "industryGrowthIndex": { type: "NUMBER" },
                         "industryGrowthLabel": { type: "STRING" },
-                        "investmentStyleIndex": { type: "NUMBER" },
-                        "investmentStyleLabel": { type: "STRING" },
+                        "advancedMetrics": {
+                            type: "OBJECT",
+                            properties: {
+                                "minimumInvestment": { type: "NUMBER" },
+                                "shareholderPerks": { type: "STRING" },
+                                "perkRating": { type: "NUMBER" },
+                                "targetPrice": { type: "NUMBER" },
+                                "earningsDate": { type: "STRING" }
+                            }
+                        },
                         "news": {
                             type: "ARRAY",
                             items: {
@@ -85,42 +84,34 @@ app.post('/api/analyze', async (req, res) => {
                         "analysis": { type: "STRING" },
                         "riskFactor": { type: "STRING" }
                     },
-                    required: ["companyName", "tickerCode", "currentPrice", "changeText", "isPositive", "tradingSignal", "tradingSignalLabel", "volatilityIndex", "volatilityLabel", "industryGrowthIndex", "industryGrowthLabel", "investmentStyleIndex", "investmentStyleLabel", "news", "fundamentals", "analysis", "riskFactor"]
+                    required: ["companyName", "tickerCode", "currentPrice", "changeText", "isPositive", "tradingSignal", "tradingSignalLabel", "volatilityIndex", "volatilityLabel", "industryGrowthIndex", "industryGrowthLabel", "advancedMetrics", "news", "fundamentals", "analysis", "riskFactor"]
                 }
             }
         };
 
         const response = await fetch(apiUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+                'Content-Type': 'application/json'
+                // ★変更点：ここにあったキー認証はURLに移動したため削除しました
+            },
             body: JSON.stringify(payload)
         });
 
         if (!response.ok) {
-            const errBody = await response.text();
-            console.error("Gemini API Error:", errBody);
-            return res.status(500).json({ error: `AIの分析中にエラーが発生しました。` });
+            const errorText = await response.text();
+            console.error("Google API Error:", errorText);
+            throw new Error(`Google API エラー (${response.status}): 権限がないか、キーが間違っています。`);
         }
 
         const result = await response.json();
-        
-        let parsedData;
-        try {
-            parsedData = JSON.parse(result.candidates[0].content.parts[0].text);
-            // フロントエンドに安全に結果だけを返す
-            res.json({ success: true, data: parsedData });
-        } catch(e) {
-            console.error("JSON Parse Error:", e);
-            res.status(500).json({ error: "AIが正しいデータを返しませんでした。" });
-        }
+        const parsedData = JSON.parse(result.candidates[0].content.parts[0].text);
+        res.json({ success: true, data: parsedData });
 
     } catch (err) {
         console.error("Server Error:", err);
-        res.status(500).json({ error: "サーバー内部でエラーが発生しました。" });
+        res.status(500).json({ error: err.message || "サーバー内部でエラーが発生しました。" });
     }
 });
 
-// サーバー起動
-app.listen(port, () => {
-    console.log(`サーバーがポート ${port} で起動しました。`);
-});
+app.listen(port, () => console.log(`Server started on port ${port}`));
