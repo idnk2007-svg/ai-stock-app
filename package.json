@@ -1,12 +1,12 @@
 {
-  "name": "ai-stock-analyzer",
-  "version": "1.0.0",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "@google/generative-ai": "^0.21.0"
-  }
+"name": "ai-stock-analyzer",
+"version": "1.0.0",
+"scripts": {
+"start": "node server.js"
+},
+"dependencies": {
+"cors": "^2.8.5",
+"express": "^4.19.2",
+"@google/generative-ai": "^0.21.0"
+}
 }
