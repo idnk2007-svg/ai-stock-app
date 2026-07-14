@@ -9,7 +9,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// AQ...形式のキーを使用する場合、環境変数から読み込むだけでOKなSDKを使います
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 app.post('/api/analyze', async (req, res) => {
@@ -20,7 +19,7 @@ app.post('/api/analyze', async (req, res) => {
         
         const promptText = `
             ユーザーが日本の株式「${query}」について検索しました。
-            以下のJSONスキーマに従って、最新の株価分析データを出力してください。
+            以下のJSON形式のみで回答してください。余計な言葉は不要です。
             {
                 "companyName": "string",
                 "tickerCode": "string",
@@ -48,15 +47,14 @@ app.post('/api/analyze', async (req, res) => {
         `;
 
         const result = await model.generateContent(promptText);
-        const text = result.response.text();
-        const cleanText = text.replace(/
-```json/g, '').replace(/```/g, '');
+        const text = result.response.text().replace(/
+```json/g, '').replace(/```/g, '').trim();
         
-        res.json({ success: true, data: JSON.parse(cleanText) });
+        res.json({ success: true, data: JSON.parse(text) });
 
     } catch (err) {
         console.error("Analysis Error:", err);
-        res.status(500).json({ error: "分析に失敗しました。キーの設定を確認してください。" });
+        res.status(500).json({ error: "分析に失敗しました。詳細: " + err.message });
     }
 });
 
