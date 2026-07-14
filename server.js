@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -8,105 +9,54 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
+// AQ...形式のキーを使用する場合、環境変数から読み込むだけでOKなSDKを使います
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
 app.post('/api/analyze', async (req, res) => {
     const { query } = req.body;
-    const apiKey = process.env.GEMINI_API_KEY;
-
-    if (!apiKey) {
-        return res.status(500).json({ error: "サーバーにAPIキーが設定されていません。" });
-    }
-
+    
     try {
-        const apiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         
         const promptText = `
-            ユーザーが日本の株式「${query}」について検索しました。以下を推測・分析してください。
-            1. 「最新の株価」「関連ニュース」「主要指標(PER, PBR, 配当利回り)」。指標は「割安」「適正」「割高」（配当は「高い」「適正」「低い」）で評価。
-            2. 「最低購入金額」（現在株価 × 100株）。
-            3. 「株主優待の有無」と内容。魅力度を0〜5で評価。
-            4. アナリストの平均的な「目標株価」。
-            5. 次回の「決算発表時期」（例: "2026年8月"）。
-            6. 総合分析し、「買い時・売り時(0-100)」とラベル、「価格変動リスク(0-100)」とラベル、「業界将来性(0-100)」とラベルを算出。
-            必ず以下のJSONスキーマに従ってください。
+            ユーザーが日本の株式「${query}」について検索しました。
+            以下のJSONスキーマに従って、最新の株価分析データを出力してください。
+            {
+                "companyName": "string",
+                "tickerCode": "string",
+                "currentPrice": 0,
+                "changeText": "string",
+                "isPositive": true,
+                "tradingSignal": 0,
+                "tradingSignalLabel": "string",
+                "volatilityIndex": 0,
+                "volatilityLabel": "string",
+                "industryGrowthIndex": 0,
+                "industryGrowthLabel": "string",
+                "advancedMetrics": {
+                    "minimumInvestment": 0,
+                    "shareholderPerks": "string",
+                    "perkRating": 0,
+                    "targetPrice": 0,
+                    "earningsDate": "string"
+                },
+                "news": [{"title": "string", "url": "string", "source": "string"}],
+                "fundamentals": {"per": "string", "perEvaluation": "string", "pbr": "string", "pbrEvaluation": "string", "dividendYield": "string", "yieldEvaluation": "string"},
+                "analysis": "string",
+                "riskFactor": "string"
+            }
         `;
 
-        const payload = {
-            contents: [{ parts: [{ text: promptText }] }],
-            generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: "OBJECT",
-                    properties: {
-                        "companyName": { type: "STRING" },
-                        "tickerCode": { type: "STRING" },
-                        "currentPrice": { type: "NUMBER" },
-                        "changeText": { type: "STRING" },
-                        "isPositive": { type: "BOOLEAN" },
-                        "tradingSignal": { type: "NUMBER" },
-                        "tradingSignalLabel": { type: "STRING" },
-                        "volatilityIndex": { type: "NUMBER" },
-                        "volatilityLabel": { type: "STRING" },
-                        "industryGrowthIndex": { type: "NUMBER" },
-                        "industryGrowthLabel": { type: "STRING" },
-                        "advancedMetrics": {
-                            type: "OBJECT",
-                            properties: {
-                                "minimumInvestment": { type: "NUMBER" },
-                                "shareholderPerks": { type: "STRING" },
-                                "perkRating": { type: "NUMBER" },
-                                "targetPrice": { type: "NUMBER" },
-                                "earningsDate": { type: "STRING" }
-                            }
-                        },
-                        "news": {
-                            type: "ARRAY",
-                            items: {
-                                type: "OBJECT",
-                                properties: {
-                                    "title": { type: "STRING" },
-                                    "url": { type: "STRING" },
-                                    "source": { type: "STRING" }
-                                }
-                            }
-                        },
-                        "fundamentals": {
-                            type: "OBJECT",
-                            properties: {
-                                "per": { type: "STRING" },
-                                "perEvaluation": { type: "STRING" },
-                                "pbr": { type: "STRING" },
-                                "pbrEvaluation": { type: "STRING" },
-                                "dividendYield": { type: "STRING" },
-                                "yieldEvaluation": { type: "STRING" }
-                            }
-                        },
-                        "analysis": { type: "STRING" },
-                        "riskFactor": { type: "STRING" }
-                    },
-                    required: ["companyName", "tickerCode", "currentPrice", "changeText", "isPositive", "tradingSignal", "tradingSignalLabel", "volatilityIndex", "volatilityLabel", "industryGrowthIndex", "industryGrowthLabel", "advancedMetrics", "news", "fundamentals", "analysis", "riskFactor"]
-                }
-            }
-        };
-
-        const response = await fetch(apiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error("Google API Error:", errorText);
-            throw new Error(`Google API エラー (${response.status}): 権限がないか、キーが間違っています。`);
-        }
-
-        const result = await response.json();
-        const parsedData = JSON.parse(result.candidates[0].content.parts[0].text);
-        res.json({ success: true, data: parsedData });
+        const result = await model.generateContent(promptText);
+        const text = result.response.text();
+        const cleanText = text.replace(/
+```json/g, '').replace(/```/g, '');
+        
+        res.json({ success: true, data: JSON.parse(cleanText) });
 
     } catch (err) {
-        console.error("Server Error:", err);
-        res.status(500).json({ error: err.message || "サーバー内部でエラーが発生しました。" });
+        console.error("Analysis Error:", err);
+        res.status(500).json({ error: "分析に失敗しました。キーの設定を確認してください。" });
     }
 });
 
