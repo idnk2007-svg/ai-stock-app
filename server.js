@@ -9,6 +9,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
+// 環境変数からAPIキーを読み込む
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 app.post('/api/analyze', async (req, res) => {
@@ -49,12 +50,12 @@ app.post('/api/analyze', async (req, res) => {
         const result = await model.generateContent(promptText);
         let text = result.response.text();
         
-        // 記号を使わず、最初から最後の { } までを抽出する安全な方法
+        // エラーを防ぐため、確実に { } の中身だけを抜き出す
         const start = text.indexOf('{');
         const end = text.lastIndexOf('}') + 1;
-        text = text.substring(start, end);
+        const jsonString = text.substring(start, end);
         
-        res.json({ success: true, data: JSON.parse(text) });
+        res.json({ success: true, data: JSON.parse(jsonString) });
 
     } catch (err) {
         console.error("Analysis Error:", err);
