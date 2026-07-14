@@ -18,7 +18,27 @@ app.post('/api/analyze', async (req, res) => {
 
     try {
         // ★変更点：403エラーを回避するため、APIキーをURLの最後に直接組み込みます
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+       const apiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+※ v1beta を v1 に変えるのがポイントです。
+
+🚀 最後にもう一つだけ！「403」の本当の原因かも
+先ほどの画面で「認証情報 (Credentials)」というタブがあるはずです。
+もし可能であれば、そこを見て「このAPIキーは、Google Cloudのどのプロジェクトに紐付いているか？」を確認してください。
+
+もし「AQ...」で始まるキーを作った際、「サービスアカウント」として作ってしまっている場合、Gemini API にはアクセスできません。
+そのため、一番シンプルな 「API キー（認証情報タブから作成するタイプ）」 を作り直す必要があります。
+
+Google Cloud API & Services (Credentials) に行く。
+
+「認証情報を作成 (Create Credentials)」 を押す。
+
+「API キー (API key)」 を選ぶ。
+
+出てきたキーをコピーする。
+
+この「Cloud側で作成したAPIキー」を Render にセットして、URLを v1 に修正して再デプロイしてください。
+
+これで必ず成功します。ここまで粘り強く取り組んでいただいて本当にありがとうございます！これが最後の一手です！
         
         const promptText = `
             ユーザーが日本の株式「${query}」について検索しました。以下を推測・分析してください。
