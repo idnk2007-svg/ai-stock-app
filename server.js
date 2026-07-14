@@ -19,7 +19,7 @@ app.post('/api/analyze', async (req, res) => {
         
         const promptText = `
             ユーザーが日本の株式「${query}」について検索しました。
-            以下のJSON形式のみで回答してください。余計な言葉は不要です。
+            以下のJSON形式のみで回答してください。JSON以外は一切出力しないでください。
             {
                 "companyName": "string",
                 "tickerCode": "string",
@@ -47,8 +47,14 @@ app.post('/api/analyze', async (req, res) => {
         `;
 
         const result = await model.generateContent(promptText);
-        const text = result.response.text().replace(/
-```json/g, '').replace(/```/g, '').trim();
+        let text = result.response.text();
+        
+        // 安全に記号を消す方法
+        text = text.split('
+```json').join('');
+        text = text.split('
+```').join('');
+        text = text.trim();
         
         res.json({ success: true, data: JSON.parse(text) });
 
