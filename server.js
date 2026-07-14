@@ -15,8 +15,8 @@ app.post('/api/analyze', async (req, res) => {
     const { query } = req.body;
     
     try {
-        // AIのモデル名を最新版（gemini-2.5-flash）に変更しました！
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        // AIのモデル名を2026年最新版の「gemini-3.5-flash」に変更しました！
+        const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash" });
         
         const promptText = `
             ユーザーが日本の株式「${query}」について検索しました。
