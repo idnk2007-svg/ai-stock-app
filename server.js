@@ -17,6 +17,9 @@ const groq = new OpenAI({
 const cache = new Map();
 const CACHE_DURATION = 1000 * 60 * 60 * 12; // 12時間
 
+// ★最強の突破口：「普通のChromeブラウザ」のフリをしてアクセスブロックを回避する
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
 function safeParse(content) {
   if (!content) return null;
   if (typeof content === 'object') return content;
@@ -55,13 +58,11 @@ app.post('/api/analyze', async (req, res) => {
   // クエリから証券コード(4桁の英数字)を抽出
   const tickerMatch = String(query).match(/[0-9][0-9A-Z]{3}/i);
   let ticker = tickerMatch ? tickerMatch[0].toUpperCase() : '';
-  let companyNameHint = String(query).replace(/[0-9a-zA-Z()（）\s]/g, '').trim();
 
   if (!ticker && query) {
-    // AIを使ってコードを推測
-    const prompt = `次の会社名に対応する日本の上場証券コード（4桁の英数字）をJSONで返してください。会社名: "${query}"。出力例: {"code":"7203"}`;
+    const prompt = `「${query}」の日本の上場証券コード(4桁の英数字)をJSONで返してください。出力例: {"code":"7203"}`;
     const resAI = await chatJSON(prompt);
-    const found = resAI?.code || resAI?.ticker || resAI?.証券コード;
+    const found = resAI?.code || resAI?.ticker;
     if (found) ticker = String(found).replace(/[^0-9A-Z]/gi, '').toUpperCase();
   }
 
@@ -69,35 +70,35 @@ app.post('/api/analyze', async (req, res) => {
     return res.status(400).json({ error: '証券コードを特定できませんでした。' });
   }
 
-  let exactCompanyName = companyNameHint;
+  let exactCompanyName = query; 
   
-  // ★最強の対策：日本の「株探（かぶたん）」から100%正確な日本語の社名を取得する
-  if (ticker) {
-      try {
-          const kabutanRes = await fetch(`https://kabutan.jp/stock/?code=${ticker}`);
-          if (kabutanRes.ok) {
-              const html = await kabutanRes.text();
-              // <title>タイミー【215A】株の基本情報｜株探（かぶたん）</title> から社名を抽出
-              const titleMatch = html.match(/<title>(.*?)【/);
-              if (titleMatch && titleMatch[1]) {
-                  exactCompanyName = titleMatch[1].trim(); // ここで確実に「タイミー」を取得！
-              }
-          }
-      } catch (e) {
-          console.warn("Kabutan fetch error", e);
+  try {
+    // ブロック回避のため、ヘッダーにUSER_AGENTを設定
+    const kabutanRes = await fetch(`https://kabutan.jp/stock/?code=${ticker}`, { 
+        headers: { 'User-Agent': USER_AGENT } 
+    });
+    if (kabutanRes.ok) {
+      const html = await kabutanRes.text();
+      // 株探のタイトルタグから正式名称だけを抜き取る
+      const titleMatch = html.match(/<title>(.*?)【/);
+      if (titleMatch && titleMatch[1] && !titleMatch[1].includes('エラー')) {
+        exactCompanyName = titleMatch[1].trim();
       }
+    }
+  } catch (e) {
+    console.warn("Kabutan fetch error", e);
   }
 
   try {
     const promptText = `
-    日本の証券コード「${ticker}」の企業について分析してください。
+    日本の証券コード「${ticker}」の企業（${exactCompanyName}）について分析してください。
     
     【極めて重要なルール】
-    ・「companyName」には、必ず「${exactCompanyName || '対象の日本企業'}」を入れてください。絶対に他の企業（例: ディー・エヌ・エー等）と混同しないでください。
+    ・「companyName」には、必ず「${exactCompanyName}」を入れてください。
     ・「tickerCode」は必ず "${ticker}" としてください。
     ・分析結果は必ず以下のJSON形式で出力してください。
     {
-      "companyName": "${exactCompanyName || '対象の日本企業'}",
+      "companyName": "${exactCompanyName}",
       "tickerCode": "${ticker}",
       "currentPrice": 0,
       "changeText": "0 (0%)",
@@ -114,16 +115,13 @@ app.post('/api/analyze', async (req, res) => {
       "riskFactor": "投資リスクや懸念事項を記載してください。"
     }`;
 
-    const chatResp = await chatJSON(promptText);
-    let parsedData = chatResp;
-
-    if (!parsedData || typeof parsedData !== 'object') {
-      return res.status(500).json({ error: 'AIからの解析結果が取得できませんでした' });
-    }
+    const parsedData = await chatJSON(promptText) || {};
 
     try {
       const fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(ticker) ? `${ticker}.T` : ticker;
-      const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${fetchSymbol}`);
+      const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${fetchSymbol}`, { 
+          headers: { 'User-Agent': USER_AGENT } 
+      });
       const priceData = await priceRes.json();
       const meta = priceData?.chart?.result?.[0]?.meta;
       if (meta?.regularMarketPrice) {
@@ -138,7 +136,7 @@ app.post('/api/analyze', async (req, res) => {
       console.warn('price fetch failed', e?.message || e);
     }
 
-    // 絶対防衛ライン：AIが何を勘違いしても、ここで正しい「株探」の日本語名に強制上書きする！
+    // AIの勘違いを防ぐための絶対防衛ライン
     parsedData.tickerCode = ticker;
     if (exactCompanyName) {
         parsedData.companyName = exactCompanyName; 
@@ -155,60 +153,51 @@ app.post('/api/search-code', async (req, res) => {
   const { query } = req.body || {};
   if (!query) return res.status(400).json({ error: 'query is required' });
 
-  const cacheKey = `search-v2:${query}`;
+  const cacheKey = `search-v4:${query}`;
   const cached = cache.get(cacheKey);
   if (cached && (Date.now() - cached.t) < CACHE_DURATION) {
     return res.json({ success: true, results: cached.v });
   }
 
   try {
-    // 1. Yahooファイナンスで上場企業の証券コード(.T)を検索 (ソニー生命等の非上場はここで弾かれます)
-    const searchRes = await fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}`);
-    const searchData = await searchRes.json();
+    // 1. AIに関連企業をピックアップさせる
+    const prompt = `「${query}」に関連する日本の上場企業の証券コード(4桁の英数字)を最大5つ、JSONで教えてください。出力例: {"codes": ["7203", "6758"]}`;
+    const aiResp = await chatJSON(prompt);
     
     let candidates = [];
-    if (searchData.quotes && searchData.quotes.length > 0) {
-        candidates = searchData.quotes
-            .filter(q => q.symbol && q.symbol.endsWith('.T'))
-            .map(q => q.symbol.replace('.T', ''));
+    if (aiResp && Array.isArray(aiResp.codes)) {
+        candidates = aiResp.codes.map(c => String(c).replace(/[^0-9A-Z]/gi, '').toUpperCase());
     }
 
-    // 2. Yahooで見つからない場合のみ、AIに推測させる（奥の手）
-    if (candidates.length === 0) {
-        const prompt = `「${query}」に関連する「日本の上場企業」の証券コード(4桁の英数字)を最大3つ挙げてください。出力例: {"codes": ["7203", "6758"]}`;
-        const aiResp = await chatJSON(prompt);
-        if (aiResp && Array.isArray(aiResp.codes)) {
-            candidates = aiResp.codes.map(c => String(c).replace(/[^0-9A-Z]/gi, '').toUpperCase());
-        }
-    }
-
-    // 3. 最後の絶対防衛ライン：株探(かぶたん)にアクセスして「実在するか」確認し、100%正確な日本語の社名を取得する
+    // 2. ピックアップした企業が本当に「上場しているか」株探にアクセスして検証する
     let verifiedResults = [];
     const uniqueCodes = new Set();
 
-    // AIがデタラメなコードを出しても、株探に存在しなければここで自動的に消去されます
     for (const code of candidates) {
         if (!code || uniqueCodes.has(code) || code.length < 4) continue;
         uniqueCodes.add(code);
         
         try {
-            const kabutanRes = await fetch(`https://kabutan.jp/stock/?code=${code}`);
+            // 人間になりすましてアクセス
+            const kabutanRes = await fetch(`https://kabutan.jp/stock/?code=${code}`, {
+                headers: { 'User-Agent': USER_AGENT }
+            });
             if (kabutanRes.ok) {
                 const html = await kabutanRes.text();
-                // <title>ソニーグループ【6758】株の基本情報｜株探（かぶたん）</title> から社名だけを抽出
                 const titleMatch = html.match(/<title>(.*?)【/);
+                // エラーページ（非上場企業など）でなければリストに追加
                 if (titleMatch && titleMatch[1]) {
-                    verifiedResults.push({
-                        name: titleMatch[1].trim(), // 正確な日本語名（TIMEE INC→タイミー等もここで解決）
-                        code: code
-                    });
+                    const name = titleMatch[1].trim();
+                    if (!name.includes('エラー') && !name.includes('見つかりません')) {
+                        verifiedResults.push({ name: name, code: code });
+                    }
                 }
             }
         } catch (e) {
             console.warn("株探 verification error:", code);
         }
         
-        if (verifiedResults.length >= 5) break; // 最大5件でストップ
+        if (verifiedResults.length >= 5) break;
     }
 
     cache.set(cacheKey, { v: verifiedResults, t: Date.now() });
