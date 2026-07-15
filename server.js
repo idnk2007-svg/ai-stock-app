@@ -15,7 +15,7 @@ const groq = new OpenAI({
 });
 
 const cache = new Map();
-const CACHE_DURATION = 1000 * 60 * 60 * 12; // 12時間キャッシュ
+const CACHE_DURATION = 1000 * 60 * 60 * 12; // 12時間
 
 function safeParse(content) {
   if (!content) return null;
@@ -39,7 +39,6 @@ async function chatJSON(prompt, model = 'llama-3.3-70b-versatile') {
     const resp = await groq.chat.completions.create({
       messages: [{ role: 'user', content: prompt }],
       model,
-      // Groqの仕様: json_objectを使う場合は必ずプロンプト内でJSONの形を指定する
       response_format: { type: 'json_object' },
     });
     const raw = resp?.choices?.[0]?.message?.content;
@@ -50,59 +49,66 @@ async function chatJSON(prompt, model = 'llama-3.3-70b-versatile') {
   }
 }
 
-function extractTickerFromQuery(q) {
-  if (!q) return '';
-  const onlyNum = String(q).replace(/[^0-9A-Za-z]/g, '');
-  if (onlyNum.length >= 4) return onlyNum.toUpperCase();
-  return '';
-}
-
-// 会社名から証券コードを推測する補助関数
-async function lookupTickerWithAI(nameOrQuery) {
-  if (!nameOrQuery) return '';
-  const prompt = `次の会社名に対応する日本の上場証券コード（4桁の数字または英数字）を特定してください。会社名: "${nameOrQuery}"。必ず以下のJSON形式で出力してください。{"code":"7203"}`;
-  const res = await chatJSON(prompt);
-  const found = res?.code || res?.ticker || res?.証券コード;
-  if (!found) return '';
-  return String(found).replace(/[^0-9A-Za-z]/g, '').toUpperCase();
-}
-
 app.post('/api/analyze', async (req, res) => {
   const { query } = req.body || {};
-  let ticker = extractTickerFromQuery(query);
+  
+  // クエリから証券コード(4桁の英数字)を抽出
+  const tickerMatch = String(query).match(/[0-9][0-9A-Z]{3}/i);
+  let ticker = tickerMatch ? tickerMatch[0].toUpperCase() : '';
 
-  // もし数字が入力されていなければ（直接「トヨタ」などと検索された場合）、AIでコードを特定する
+  // クエリから日本語の会社名を抽出（記号や英数字を削除）
+  let companyNameHint = String(query).replace(/[0-9a-zA-Z()（）\s]/g, '').trim();
+
   if (!ticker && query) {
-    ticker = await lookupTickerWithAI(query);
+    // AIを使ってコードを推測
+    const prompt = `次の会社名に対応する日本の上場証券コード（4桁の英数字）をJSONで返してください。会社名: "${query}"。出力例: {"code":"7203"}`;
+    const resAI = await chatJSON(prompt);
+    const found = resAI?.code || resAI?.ticker || resAI?.証券コード;
+    if (found) ticker = String(found).replace(/[^0-9A-Z]/gi, '').toUpperCase();
   }
 
   if (!ticker) {
-    return res.status(400).json({ error: '証券コードを特定できませんでした。別のキーワードでお試しください。' });
+    return res.status(400).json({ error: '証券コードを特定できませんでした。' });
+  }
+
+  if (!companyNameHint) {
+    try {
+        const fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(ticker) ? `${ticker}.T` : ticker;
+        const searchRes = await fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${fetchSymbol}`);
+        const searchData = await searchRes.json();
+        if (searchData.quotes && searchData.quotes.length > 0) {
+            companyNameHint = searchData.quotes[0].longname || searchData.quotes[0].shortname || '';
+        }
+    } catch (e) {
+        console.warn("Name fetch error", e);
+    }
   }
 
   try {
-    const promptText = `日本の証券コード「${ticker}」の企業について分析してください。
-【重要ルール】
-・「companyName」には、証券コード${ticker}に対応する「実際の正式な企業名」を必ず日本語で入れてください（例：トヨタ自動車株式会社、ソニーグループなど。"対象の日本企業"のようなプレースホルダーは絶対に使用しないでください）。
-・「tickerCode」は必ず "${ticker}" としてください。
-・分析結果は必ず以下のJSON形式で出力してください。
-{
-  "companyName": "実際の正式な企業名",
-  "tickerCode": "${ticker}",
-  "currentPrice": 0,
-  "changeText": "0 (0%)",
-  "isPositive": true,
-  "tradingSignal": 50,
-  "tradingSignalLabel": "中立",
-  "volatilityIndex": 50,
-  "volatilityLabel": "普通",
-  "industryGrowthIndex": 50,
-  "industryGrowthLabel": "安定",
-  "news": [{"title": "関連ニュース", "url": "#", "source": "メディア名"}],
-  "fundamentals": {"per": "-", "perEvaluation": "適正", "pbr": "-", "pbrEvaluation": "適正", "dividendYield": "-", "yieldEvaluation": "適正"},
-  "analysis": "企業の現状と今後の動向を詳しく分析してください。",
-  "riskFactor": "投資リスクや懸念事項を記載してください。"
-}`;
+    const promptText = `
+    日本の証券コード「${ticker}」の企業について分析してください。
+    
+    【極めて重要なルール】
+    ・「companyName」には、必ず「${companyNameHint || '対象企業'}」に関連する正式な企業名（日本語表記）を入れてください。絶対に「東京エレクトロン」など別の企業と混同しないでください。
+    ・「tickerCode」は必ず "${ticker}" としてください。
+    ・分析結果は必ず以下のJSON形式で出力してください。
+    {
+      "companyName": "実際の正式な企業名",
+      "tickerCode": "${ticker}",
+      "currentPrice": 0,
+      "changeText": "0 (0%)",
+      "isPositive": true,
+      "tradingSignal": 50,
+      "tradingSignalLabel": "中立",
+      "volatilityIndex": 50,
+      "volatilityLabel": "普通",
+      "industryGrowthIndex": 50,
+      "industryGrowthLabel": "安定",
+      "news": [{"title": "関連ニュース", "url": "#", "source": "メディア名"}],
+      "fundamentals": {"per": "-", "perEvaluation": "適正", "pbr": "-", "pbrEvaluation": "適正", "dividendYield": "-", "yieldEvaluation": "適正"},
+      "analysis": "企業の現状と今後の動向を詳しく分析してください。",
+      "riskFactor": "投資リスクや懸念事項を記載してください。"
+    }`;
 
     const chatResp = await chatJSON(promptText);
     let parsedData = chatResp;
@@ -111,26 +117,25 @@ app.post('/api/analyze', async (req, res) => {
       return res.status(500).json({ error: 'AIからの解析結果が取得できませんでした' });
     }
 
-    const code = String(parsedData.tickerCode || ticker).replace(/[^0-9A-Za-z]/g, '');
-    if (code) {
-      try {
-        // Yahooファイナンスからリアルタイム株価を上書き取得
-        const fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(code) ? `${code}.T` : code;
-        const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${fetchSymbol}`);
-        const priceData = await priceRes.json();
-        const meta = priceData?.chart?.result?.[0]?.meta;
-        if (meta?.regularMarketPrice) {
-          parsedData.currentPrice = meta.regularMarketPrice;
-          const prev = meta.chartPreviousClose || meta.regularMarketPreviousClose || meta.regularMarketPrice;
-          const diff = meta.regularMarketPrice - prev;
-          const percent = prev ? (diff / prev) * 100 : 0;
-          parsedData.changeText = `${diff >= 0 ? '+' : ''}${diff.toFixed(1)} (${percent.toFixed(2)}%)`;
-          parsedData.isPositive = diff >= 0;
-        }
-      } catch (e) {
-        console.warn('price fetch failed', e?.message || e);
+    try {
+      const fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(ticker) ? `${ticker}.T` : ticker;
+      const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${fetchSymbol}`);
+      const priceData = await priceRes.json();
+      const meta = priceData?.chart?.result?.[0]?.meta;
+      if (meta?.regularMarketPrice) {
+        parsedData.currentPrice = meta.regularMarketPrice;
+        const prev = meta.chartPreviousClose || meta.regularMarketPreviousClose || meta.regularMarketPrice;
+        const diff = meta.regularMarketPrice - prev;
+        const percent = prev ? (diff / prev) * 100 : 0;
+        parsedData.changeText = `${diff >= 0 ? '+' : ''}${diff.toFixed(1)} (${percent.toFixed(2)}%)`;
+        parsedData.isPositive = diff >= 0;
       }
+    } catch (e) {
+      console.warn('price fetch failed', e?.message || e);
     }
+
+    // 確実な上書き（保険）
+    parsedData.tickerCode = ticker;
 
     return res.json({ success: true, data: parsedData });
   } catch (err) {
@@ -150,20 +155,16 @@ app.post('/api/search-code', async (req, res) => {
   }
 
   try {
-    // 【修正点】Groqのエラーを防ぐため、必ず "results" というキーを持ったオブジェクト形式で出力させる
-    const prompt = `ユーザーが「${query}」と検索しました。これに関連する日本の上場企業を最大5社挙げてください。
-必ず以下のJSON形式で返してください。JSON以外は絶対に何も出力しないでください。
-{"results": [{"name": "正式な会社名", "code": "証券コード(数字のみ)"}]}`;
+    const prompt = `「${query}」に関連する日本の上場企業を最大5社挙げてください。必ず「会社名」と「証券コード(4桁)」をJSONの配列で返してください。
+    出力例: {"results": [{"name": "ソニーグループ株式会社", "code": "6758"}]}`;
 
     const aiResp = await chatJSON(prompt);
     let results = [];
-    
-    // AIの返答から配列を取り出して、フロントエンドが求める形（name, code）に整える
     if (aiResp && Array.isArray(aiResp.results)) {
         results = aiResp.results.map(item => ({ 
             name: item.name || item.companyName || '名称不明', 
-            code: String(item.code || item.ticker || '').replace(/[^0-9A-Za-z]/g, '') 
-        })).filter(r => r.code);
+            code: String(item.code || item.ticker || '').replace(/[^0-9A-Z]/gi, '').toUpperCase() 
+        })).filter(r => r.code.length >= 4);
     }
 
     cache.set(cacheKey, { v: results, t: Date.now() });
