@@ -21,12 +21,17 @@ function safeParse(content) {
   if (!content) return null;
   if (typeof content === 'object') return content;
   if (typeof content === 'string') {
+    const s = content.trim();
     try {
-      return JSON.parse(content);
+      return JSON.parse(s);
     } catch (e) {
-      const m = content.match(/\{[\s\S]*\}/);
-      if (m) {
-        try { return JSON.parse(m[0]); } catch (e2) { return null; }
+      const objMatch = s.match(/\{[\s\S]*\}/);
+      const arrMatch = s.match(/\[[\s\S]*\]/);
+      try {
+        if (arrMatch) return JSON.parse(arrMatch[0]);
+        if (objMatch) return JSON.parse(objMatch[0]);
+      } catch (e2) {
+        return null;
       }
       return null;
     }
@@ -42,7 +47,8 @@ async function chatJSON(prompt, model = 'llama-3.3-70b-versatile') {
       response_format: { type: 'json_object' },
     });
     const raw = resp?.choices?.[0]?.message?.content;
-    return safeParse(raw) || raw;
+    const parsed = safeParse(raw);
+    return parsed ?? raw;
   } catch (e) {
     console.error('chatJSON error', e?.message || e);
     return null;
@@ -60,9 +66,24 @@ async function lookupTickerWithAI(nameOrQuery) {
   if (!nameOrQuery) return '';
   const prompt = `次の会社名に対応する日本の上場証券コード（数字のみ）をJSONで返してください。会社名: "${nameOrQuery}"。出力例: {"ticker":"7203"}`;
   const res = await chatJSON(prompt);
-  const found = res?.ticker || res?.code || res?.証券コード || (typeof res === 'string' ? res : undefined);
-  if (!found) return '';
-  return String(found).replace(/[^0-9]/g, '');
+
+  if (Array.isArray(res) && res.length > 0) {
+    const first = res[0];
+    const found = first?.ticker || first?.code || first?.証券コード || first?.tickerCode;
+    if (found) return String(found).replace(/[^0-9]/g, '');
+  }
+
+  if (res && typeof res === 'object') {
+    const found = res?.ticker || res?.code || res?.証券コード || res?.tickerCode || (res.results && res.results[0] && (res.results[0].ticker || res.results[0].code));
+    if (found) return String(found).replace(/[^0-9]/g, '');
+  }
+
+  if (typeof res === 'string') {
+    const m = res.match(/(\d{3,6})/);
+    if (m) return m[1];
+  }
+
+  return '';
 }
 
 app.post('/api/analyze', async (req, res) => {
@@ -79,12 +100,15 @@ app.post('/api/analyze', async (req, res) => {
     const chatResp = await chatJSON(promptText);
     let parsedData = chatResp;
 
+    if (Array.isArray(parsedData)) parsedData = parsedData[0];
+
     if (!parsedData || typeof parsedData !== 'object') {
+      console.error('analyze: unexpected AI response', chatResp);
       return res.status(500).json({ error: 'AIからの解析結果が取得できませんでした' });
     }
 
-    if (parsedData.tickerCode || ticker) {
-      const code = String(parsedData.tickerCode || ticker).replace(/[^0-9]/g, '');
+    const code = String(parsedData.tickerCode || ticker || '').replace(/[^0-9]/g, '');
+    if (code) {
       try {
         const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${code}.T`);
         const priceData = await priceRes.json();
@@ -124,16 +148,18 @@ app.post('/api/search-code', async (req, res) => {
 
     const aiResp = await chatJSON(prompt);
     let results = [];
+
     if (Array.isArray(aiResp)) {
       results = aiResp.map(item => ({ companyName: item.companyName || item.name || item.会社名, ticker: String(item.ticker || item.code || item.証券コード || '').replace(/[^0-9]/g, '') })).filter(r => r.ticker);
     } else if (aiResp && typeof aiResp === 'object') {
-      if (Array.isArray(aiResp.results)) {
-        results = aiResp.results.map(item => ({ companyName: item.companyName || item.name, ticker: String(item.ticker || item.code || '').replace(/[^0-9]/g, '') })).filter(r => r.ticker);
-      } else {
-        results = Object.values(aiResp).filter(Boolean).map(item => {
-          if (typeof item === 'string') return null;
-          return { companyName: item.companyName || item.name || item.会社名, ticker: String(item.ticker || item.code || item.証券コード || '').replace(/[^0-9]/g, '') };
-        }).filter(Boolean).filter(r => r.ticker);
+      const arr = aiResp.results && Array.isArray(aiResp.results) ? aiResp.results : Object.values(aiResp).filter(v => typeof v === 'object');
+      if (Array.isArray(arr)) {
+        results = arr.map(item => ({ companyName: item.companyName || item.name || item.会社名, ticker: String(item.ticker || item.code || item.証券コード || '').replace(/[^0-9]/g, '') })).filter(r => r.ticker);
+      }
+    } else if (typeof aiResp === 'string') {
+      const parsed = safeParse(aiResp);
+      if (Array.isArray(parsed)) {
+        results = parsed.map(item => ({ companyName: item.companyName || item.name || item.会社名, ticker: String(item.ticker || item.code || item.証券コード || '').replace(/[^0-9]/g, '') })).filter(r => r.ticker);
       }
     }
 
