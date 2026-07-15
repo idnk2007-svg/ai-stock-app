@@ -20,25 +20,33 @@
 
     <div class="w-full max-w-6xl space-y-6">
         <div class="flex flex-col md:flex-row justify-between items-center gap-4 bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
-            <div class="flex items-center gap-3">
-                <div class="p-3 bg-blue-600 rounded-xl shadow-lg shadow-blue-500/30">
+            <div class="flex items-center gap-3 w-full md:w-auto">
+                <div class="p-3 bg-blue-600 rounded-xl shadow-lg shadow-blue-500/30 shrink-0">
                     <i class="fa-solid fa-chart-line text-2xl text-white"></i>
                 </div>
                 <div>
-                    <h1 class="text-2xl font-bold text-white tracking-tight">AI 株価予想アナライザ</h1>
-                    <p class="text-slate-400 text-sm">企業名や証券コードから最新の動向をAIが分析</p>
+                    <h1 class="text-xl md:text-2xl font-bold text-white tracking-tight">AI 株価予想アナライザ</h1>
+                    <p class="text-slate-400 text-xs md:text-sm">証券コードから最新の動向をAIが分析</p>
                 </div>
             </div>
 
-            <form id="searchForm" class="w-full md:w-auto flex gap-2">
-                <div class="relative w-full md:w-80">
-                    <input type="text" id="searchInput" placeholder="例: トヨタ, 7203, ソニー" required
-                        class="w-full pl-4 pr-4 py-3 bg-slate-900 border border-slate-600 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+            <div class="w-full md:w-auto flex flex-col gap-2">
+                <form id="searchForm" class="flex gap-2">
+                    <div class="relative w-full md:w-80">
+                        <input type="text" id="searchInput" placeholder="証券コードを入力 (例: 7203, 215A)" required
+                            class="w-full pl-4 pr-4 py-3 bg-slate-900 border border-slate-600 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+                    </div>
+                    <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-medium transition-colors shadow-lg shadow-blue-600/20 whitespace-nowrap">
+                        分析
+                    </button>
+                </form>
+                <!-- ★ここが追加された天才的なアイデアの部分です！★ -->
+                <div class="text-right px-1">
+                    <a href="https://finance.yahoo.co.jp/" target="_blank" rel="noopener noreferrer" class="text-xs text-blue-400 hover:text-blue-300 transition-colors inline-flex items-center gap-1">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i> 証券コードが分からない場合はこちら
+                    </a>
                 </div>
-                <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-medium transition-colors shadow-lg shadow-blue-600/20 whitespace-nowrap">
-                    分析
-                </button>
-            </form>
+            </div>
         </div>
 
         <div id="searchHistory" class="flex flex-wrap gap-2 px-2 hidden"></div>
@@ -82,7 +90,6 @@
                     </div>
                 </div>
 
-                <!-- Volatility / Risk Card -->
                 <div class="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
                     <h3 class="text-xs font-bold text-slate-400 mb-4 uppercase tracking-wider">価格変動リスク (ボラティリティ)</h3>
                     <div class="flex justify-between items-end mb-2">
@@ -90,7 +97,6 @@
                         <span id="volatilityValue" class="text-3xl font-bold text-white">--</span>
                     </div>
                     <div class="relative h-4 bg-slate-900 rounded-full overflow-hidden border border-slate-700 shadow-inner">
-                        <!-- 安定(青) -> 普通(黄) -> 高リスク(赤) のグラデーション -->
                         <div class="absolute inset-0 bg-gradient-to-r from-blue-500 via-yellow-500 to-red-500 opacity-80"></div>
                         <div id="volatilityPointer" class="absolute top-0 bottom-0 w-1.5 bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)] transition-all duration-1000 ease-out" style="left: 50%;"></div>
                     </div>
@@ -101,7 +107,6 @@
                     </div>
                 </div>
 
-                <!-- Industry Growth Card -->
                 <div class="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
                     <h3 class="text-xs font-bold text-slate-400 mb-4 uppercase tracking-wider">業界の将来成長性</h3>
                     <div class="flex justify-between items-end mb-2">
@@ -109,7 +114,6 @@
                         <span id="growthValue" class="text-3xl font-bold text-white">--</span>
                     </div>
                     <div class="relative h-4 bg-slate-900 rounded-full overflow-hidden border border-slate-700 shadow-inner">
-                        <!-- 衰退(赤) -> 安定(黄) -> 成長(緑) のグラデーション -->
                         <div class="absolute inset-0 bg-gradient-to-r from-red-500 via-yellow-500 to-emerald-500 opacity-80"></div>
                         <div id="growthPointer" class="absolute top-0 bottom-0 w-1.5 bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)] transition-all duration-1000 ease-out" style="left: 50%;"></div>
                     </div>
@@ -143,7 +147,6 @@
             </div>
 
             <div class="lg:col-span-2 space-y-6">
-                <!-- External Chart Link Card -->
                 <div class="bg-slate-800 p-8 rounded-2xl shadow-lg border border-slate-700 flex flex-col items-center justify-center text-center">
                     <div class="p-4 bg-slate-900 rounded-full text-blue-500 mb-4 shadow-inner">
                         <i class="fa-solid fa-chart-pie text-4xl"></i>
@@ -181,10 +184,6 @@
     </div>
 
     <script>
-        // --- 設定事項 ---
-        // ※フロントエンドからはAPIキーを完全に削除しました！安全です。
-        
-        // DOM Elements
         const searchForm = document.getElementById('searchForm');
         const searchInput = document.getElementById('searchInput');
         const loadingState = document.getElementById('loadingState');
@@ -196,7 +195,6 @@
         let currentTickerCode = null;
         let searchHistory = JSON.parse(localStorage.getItem('stockSearchHistory') || '[]');
 
-        // --- 検索履歴管理 ---
         function renderHistory() {
             if (searchHistory.length === 0) {
                 searchHistoryEl.classList.add('hidden');
@@ -227,7 +225,6 @@
             }
         }
 
-        // --- AIデータ取得 (自作バックエンドサーバーへ通信) ---
         searchForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const query = searchInput.value.trim();
@@ -238,7 +235,6 @@
             errorState.classList.add('hidden');
 
             try {
-                // IMPORTANT: ここが新しい自作サーバーへの通信に変更されています！
                 const response = await fetch('/api/analyze', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -249,11 +245,10 @@
 
                 if (!response.ok) throw new Error(`サーバーエラー: ${result.error || response.status}`);
                 
-                // サーバーから安全にデータを受け取る
                 const parsedData = result.data;
 
                 updateDashboard(parsedData);
-                addToHistory(parsedData.companyName);
+                addToHistory(query); // 検索したコードをそのまま履歴に残す
                 
                 loadingState.classList.add('hidden');
                 resultsDashboard.classList.remove('hidden');
@@ -269,10 +264,7 @@
             errorState.classList.remove('hidden');
         }
 
-        // --- ダッシュボード反映 ---
         function updateDashboard(data) {
-            // 不要な文字を削除し、確実に4桁の数字のみにする
-            // 修正: 数字だけでなくアルファベットも含めるように変更 (例: 130A, AAPL等に対応)
             const cleanTickerCode = (data.tickerCode || '').toString().replace(/[^0-9A-Za-z]/g, '').toUpperCase();
             currentTickerCode = cleanTickerCode;
             const currentStockPrice = data.currentPrice || 0;
@@ -280,7 +272,6 @@
 
             document.getElementById('companyName').textContent = data.companyName;
             
-            // 修正: 日本株(4文字)の場合は.Tを付ける、それ以外はそのまま表示
             if (/^[0-9][0-9A-Z]{3}$/.test(cleanTickerCode)) {
                 document.getElementById('companyCode').textContent = cleanTickerCode ? `${cleanTickerCode}.T` : '---';
             } else {
@@ -305,12 +296,10 @@
             document.getElementById('signalLabel').textContent = data.tradingSignalLabel;
             document.getElementById('signalPointer').style.left = `${data.tradingSignal}%`;
 
-            // Volatility / Risk Indicator
             document.getElementById('volatilityValue').textContent = data.volatilityIndex;
             document.getElementById('volatilityLabel').textContent = data.volatilityLabel;
             document.getElementById('volatilityPointer').style.left = `${data.volatilityIndex}%`;
 
-            // Industry Growth Indicator
             document.getElementById('growthValue').textContent = data.industryGrowthIndex;
             document.getElementById('growthLabel').textContent = data.industryGrowthLabel;
             document.getElementById('growthPointer').style.left = `${data.industryGrowthIndex}%`;
@@ -340,7 +329,6 @@
             document.getElementById('aiAnalysis').textContent = data.analysis;
             document.getElementById('riskFactor').textContent = data.riskFactor || '-';
 
-            // ニュースの描画
             const newsContainer = document.getElementById('newsContainer');
             newsContainer.innerHTML = '';
             if (data.news && data.news.length > 0) {
@@ -359,10 +347,8 @@
                 });
             }
 
-            // TradingViewリンクの更新
             const chartLink = document.getElementById('externalChartLink');
             if (currentTickerCode) {
-                // 修正: 日本株の場合はTSE-を付け、米国株等の場合はそのままURLに組み込む
                 if (/^[0-9][0-9A-Z]{3}$/.test(currentTickerCode)) {
                     chartLink.href = `https://jp.tradingview.com/symbols/TSE-${currentTickerCode}/`;
                 } else {
