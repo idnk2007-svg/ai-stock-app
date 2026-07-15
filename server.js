@@ -55,8 +55,6 @@ app.post('/api/analyze', async (req, res) => {
   // クエリから証券コード(4桁の英数字)を抽出
   const tickerMatch = String(query).match(/[0-9][0-9A-Z]{3}/i);
   let ticker = tickerMatch ? tickerMatch[0].toUpperCase() : '';
-
-  // クエリから日本語の会社名を抽出（記号や英数字を削除）
   let companyNameHint = String(query).replace(/[0-9a-zA-Z()（）\s]/g, '').trim();
 
   if (!ticker && query) {
@@ -71,17 +69,23 @@ app.post('/api/analyze', async (req, res) => {
     return res.status(400).json({ error: '証券コードを特定できませんでした。' });
   }
 
-  if (!companyNameHint) {
-    try {
-        const fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(ticker) ? `${ticker}.T` : ticker;
-        const searchRes = await fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${fetchSymbol}`);
-        const searchData = await searchRes.json();
-        if (searchData.quotes && searchData.quotes.length > 0) {
-            companyNameHint = searchData.quotes[0].longname || searchData.quotes[0].shortname || '';
-        }
-    } catch (e) {
-        console.warn("Name fetch error", e);
-    }
+  let exactCompanyName = companyNameHint;
+  
+  // ★最強の対策：日本の「株探（かぶたん）」から100%正確な日本語の社名を取得する
+  if (ticker) {
+      try {
+          const kabutanRes = await fetch(`https://kabutan.jp/stock/?code=${ticker}`);
+          if (kabutanRes.ok) {
+              const html = await kabutanRes.text();
+              // <title>タイミー【215A】株の基本情報｜株探（かぶたん）</title> から社名を抽出
+              const titleMatch = html.match(/<title>(.*?)【/);
+              if (titleMatch && titleMatch[1]) {
+                  exactCompanyName = titleMatch[1].trim(); // ここで確実に「タイミー」を取得！
+              }
+          }
+      } catch (e) {
+          console.warn("Kabutan fetch error", e);
+      }
   }
 
   try {
@@ -89,11 +93,11 @@ app.post('/api/analyze', async (req, res) => {
     日本の証券コード「${ticker}」の企業について分析してください。
     
     【極めて重要なルール】
-    ・「companyName」には、必ず「${companyNameHint || '対象企業'}」の【日本語での正式な企業名】を入れてください。（例: "TIMEE INC" や "SONY GROUP" などの英語表記の場合は、必ず "株式会社タイミー" や "ソニーグループ" のように日本語のカタカナ・漢字に翻訳・修正してください）。絶対に「東京エレクトロン」など別の企業と混同しないでください。
+    ・「companyName」には、必ず「${exactCompanyName || '対象の日本企業'}」を入れてください。絶対に他の企業（例: ディー・エヌ・エー等）と混同しないでください。
     ・「tickerCode」は必ず "${ticker}" としてください。
     ・分析結果は必ず以下のJSON形式で出力してください。
     {
-      "companyName": "実際の正式な企業名",
+      "companyName": "${exactCompanyName || '対象の日本企業'}",
       "tickerCode": "${ticker}",
       "currentPrice": 0,
       "changeText": "0 (0%)",
@@ -134,8 +138,11 @@ app.post('/api/analyze', async (req, res) => {
       console.warn('price fetch failed', e?.message || e);
     }
 
-    // 確実な上書き（保険）
+    // 絶対防衛ライン：AIが何を勘違いしても、ここで正しい「株探」の日本語名に強制上書きする！
     parsedData.tickerCode = ticker;
+    if (exactCompanyName) {
+        parsedData.companyName = exactCompanyName; 
+    }
 
     return res.json({ success: true, data: parsedData });
   } catch (err) {
@@ -156,7 +163,7 @@ app.post('/api/search-code', async (req, res) => {
 
   try {
     const prompt = `「${query}」に関連する日本の上場企業を最大5社挙げてください。必ず「会社名」と「証券コード(4桁)」をJSONの配列で返してください。
-    出力例: {"results": [{"name": "ソニーグループ株式会社", "code": "6758"}]}`;
+    出力例: {"results": [{"name": "ソニーグループ", "code": "6758"}]}`;
 
     const aiResp = await chatJSON(prompt);
     let results = [];
