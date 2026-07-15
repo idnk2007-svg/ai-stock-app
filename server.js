@@ -17,7 +17,6 @@ const groq = new OpenAI({
 const cache = new Map();
 const CACHE_DURATION = 1000 * 60 * 60 * 12;
 
-// メイン分析API
 app.post('/api/analyze', async (req, res) => {
     const { query } = req.body;
     const normalizedQuery = query.toLowerCase().trim();
@@ -27,7 +26,6 @@ app.post('/api/analyze', async (req, res) => {
     }
 
     try {
-        // AIに詳細な分析を依頼（コードが確定している前提）
         const promptText = `
             証券コード「${query}」の日本企業について分析してください。
             JSON形式のみで出力してください。
@@ -58,7 +56,6 @@ app.post('/api/analyze', async (req, res) => {
 
         let parsedData = JSON.parse(chatCompletion.choices[0].message.content);
         
-        // Yahooからリアルタイム株価を取得して正確なデータを上書き
         try {
             const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${query}.T`);
             const priceData = await priceRes.json();
@@ -77,11 +74,9 @@ app.post('/api/analyze', async (req, res) => {
     }
 });
 
-// ★修正版：会社名からコードを確実に特定するAPI（AI主導検索）
 app.post('/api/search-code', async (req, res) => {
     const { query } = req.body;
     try {
-        // AIに「日本の上場企業」リストを正確に作らせる
         const prompt = `「${query}」に関連する日本の上場企業を最大5社挙げてください。
         必ず「正式な会社名」と「正しい4桁の証券コード」をJSONで回答してください。
         例: {"results": [{"code": "6758", "name": "ソニーグループ"}]}
@@ -101,9 +96,3 @@ app.post('/api/search-code', async (req, res) => {
 });
 
 app.listen(port, () => console.log(`Server started on port ${port}`));
-```
-
-### 2. フロントエンドの修正 (`public/index.html`)
-検索候補をクリックした時に、`code` を正しく入力欄にセットする処理を確実にします。
-
-```html:AI株価予想ダッシュボード:public/index.html
