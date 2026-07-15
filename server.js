@@ -1,3 +1,4 @@
+const express = require('express');
 const cors = require('cors');
 const { OpenAI } = require('openai');
 
@@ -8,12 +9,13 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Groq APIクライアントの設定
+// Groq (Llama 3) APIクライアントの設定
 const groq = new OpenAI({
     apiKey: process.env.GROQ_API_KEY,
     baseURL: "https://api.groq.com/openai/v1"
 });
 
+// キャッシュの設定 (12時間保持)
 const cache = new Map();
 const CACHE_DURATION = 1000 * 60 * 60 * 12;
 
@@ -21,6 +23,7 @@ app.post('/api/analyze', async (req, res) => {
     const { query } = req.body;
     const normalizedQuery = query.toLowerCase().trim();
     
+    // 1. キャッシュの確認
     if (cache.has(normalizedQuery)) {
         const cachedItem = cache.get(normalizedQuery);
         if (Date.now() - cachedItem.timestamp < CACHE_DURATION) {
@@ -29,33 +32,53 @@ app.post('/api/analyze', async (req, res) => {
     }
 
     try {
+        // 2. Yahooファイナンス検索で、コード(215Aなど)から正しい会社名(TIMEE)を先に割り出す
+        let actualCompanyName = query;
+        let yahooSymbol = "";
+        
+        try {
+            const searchRes = await fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}`);
+            if (searchRes.ok) {
+                const searchData = await searchRes.json();
+                if (searchData.quotes && searchData.quotes.length > 0) {
+                    const quote = searchData.quotes[0];
+                    // 英名や正式名称を取得してAIの誤認を防ぐ
+                    actualCompanyName = quote.longname || quote.shortname || query;
+                    yahooSymbol = quote.symbol; 
+                }
+            }
+        } catch (e) {
+            console.error("Name fetch error:", e);
+        }
+
+        // 3. 確定した会社名を使ってGroqに分析させる
         const promptText = `
-            ユーザーが日本の株式「${query}」について検索しました。
-            最新の株価、関連ニュース、主要指標を取得して分析してください。
+            ユーザーが株式「${actualCompanyName} (検索クエリ: ${query})」について検索しました。
+            この企業に関する最新の動向、関連ニュース、主要指標を分析してください。
             以下のJSON形式のみで回答してください。JSON以外は一切出力しないでください。
             {
-                "companyName": "string",
-                "tickerCode": "string",
+                "companyName": "${actualCompanyName}",
+                "tickerCode": "${yahooSymbol ? yahooSymbol.replace('.T', '') : query}",
                 "currentPrice": 0,
-                "changeText": "string",
+                "changeText": "0 (0%)",
                 "isPositive": true,
-                "tradingSignal": 0,
-                "tradingSignalLabel": "string",
-                "volatilityIndex": 0,
-                "volatilityLabel": "string",
-                "industryGrowthIndex": 0,
-                "industryGrowthLabel": "string",
+                "tradingSignal": 50,
+                "tradingSignalLabel": "中立",
+                "volatilityIndex": 50,
+                "volatilityLabel": "普通",
+                "industryGrowthIndex": 50,
+                "industryGrowthLabel": "安定",
                 "advancedMetrics": {
                     "minimumInvestment": 0,
-                    "shareholderPerks": "string",
+                    "shareholderPerks": "なし",
                     "perkRating": 0,
                     "targetPrice": 0,
-                    "earningsDate": "string"
+                    "earningsDate": "未定"
                 },
-                "news": [{"title": "string", "url": "string", "source": "string"}],
-                "fundamentals": {"per": "string", "perEvaluation": "string", "pbr": "string", "pbrEvaluation": "string", "dividendYield": "string", "yieldEvaluation": "string"},
-                "analysis": "string",
-                "riskFactor": "string"
+                "news": [{"title": "関連ニュースタイトル", "url": "#", "source": "ニュース元"}],
+                "fundamentals": {"per": "-", "perEvaluation": "適正", "pbr": "-", "pbrEvaluation": "適正", "dividendYield": "-", "yieldEvaluation": "適正"},
+                "analysis": "企業の現状と今後の動向についての詳細な分析コメントを記載してください。",
+                "riskFactor": "投資に関するリスクや懸念事項を記載してください。"
             }
         `;
 
@@ -65,25 +88,39 @@ app.post('/api/analyze', async (req, res) => {
             response_format: { type: "json_object" },
         });
 
-        let parsedData = JSON.parse(chatCompletion.choices[0].message.content);
+        let text = chatCompletion.choices[0].message.content;
+        
+        // 確実なJSONパース (余計な文字を削る)
+        const start = text.indexOf('{');
+        const end = text.lastIndexOf('}') + 1;
+        text = text.substring(start, end);
+        let parsedData = JSON.parse(text);
 
+        // 4. Yahooファイナンスからリアルタイムの株価を取得して上書き（TradingViewと一致させる）
         try {
-            const cleanTickerCode = (parsedData.tickerCode || '').toString().replace(/[^0-9A-Za-z]/g, '').toUpperCase();
-            if (cleanTickerCode) {
-                let yahooSymbol = /^[0-9]/.test(cleanTickerCode) ? `${cleanTickerCode}.T` : cleanTickerCode;
-                const yahooRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${yahooSymbol}`, {
+            let fetchSymbol = yahooSymbol;
+            if (!fetchSymbol) {
+                const cleanCode = query.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
+                fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(cleanCode) ? `${cleanCode}.T` : cleanCode;
+            }
+
+            if (fetchSymbol) {
+                const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${fetchSymbol}`, {
                     headers: { 'User-Agent': 'Mozilla/5.0' }
                 });
                 
-                if (yahooRes.ok) {
-                    const yahooData = await yahooRes.json();
-                    const actualPrice = yahooData?.chart?.result?.[0]?.meta?.regularMarketPrice;
-                    const previousClose = yahooData?.chart?.result?.[0]?.meta?.chartPreviousClose;
-
-                    if (actualPrice) {
-                        parsedData.currentPrice = actualPrice;
+                if (priceRes.ok) {
+                    const priceData = await priceRes.json();
+                    const meta = priceData?.chart?.result?.[0]?.meta;
+                    if (meta && meta.regularMarketPrice) {
+                        const currentPrice = meta.regularMarketPrice;
+                        const previousClose = meta.chartPreviousClose;
+                        
+                        // 正確な金額に上書き
+                        parsedData.currentPrice = currentPrice;
+                        
                         if (previousClose) {
-                            const diff = actualPrice - previousClose;
+                            const diff = currentPrice - previousClose;
                             const diffPercent = (diff / previousClose) * 100;
                             parsedData.isPositive = diff >= 0;
                             const sign = diff >= 0 ? '+' : '';
@@ -92,14 +129,17 @@ app.post('/api/analyze', async (req, res) => {
                     }
                 }
             }
-        } catch (priceErr) { console.error("Price fetch error:", priceErr); }
+        } catch (priceErr) {
+            console.error("Price overwrite error:", priceErr);
+        }
 
+        // 5. 結果を保存してブラウザに返す
         cache.set(normalizedQuery, { timestamp: Date.now(), data: parsedData });
         res.json({ success: true, data: parsedData });
 
     } catch (err) {
         console.error("Analysis Error:", err);
-        res.status(500).json({ error: "分析に失敗しました。" });
+        res.status(500).json({ error: "分析に失敗しました。詳細: " + err.message });
     }
 });
 
