@@ -155,27 +155,64 @@ app.post('/api/search-code', async (req, res) => {
   const { query } = req.body || {};
   if (!query) return res.status(400).json({ error: 'query is required' });
 
-  const cacheKey = `search:${query}`;
+  const cacheKey = `search-v2:${query}`;
   const cached = cache.get(cacheKey);
   if (cached && (Date.now() - cached.t) < CACHE_DURATION) {
     return res.json({ success: true, results: cached.v });
   }
 
   try {
-    const prompt = `「${query}」に関連する日本の上場企業を最大5社挙げてください。必ず「会社名」と「証券コード(4桁)」をJSONの配列で返してください。
-    出力例: {"results": [{"name": "ソニーグループ", "code": "6758"}]}`;
-
-    const aiResp = await chatJSON(prompt);
-    let results = [];
-    if (aiResp && Array.isArray(aiResp.results)) {
-        results = aiResp.results.map(item => ({ 
-            name: item.name || item.companyName || '名称不明', 
-            code: String(item.code || item.ticker || '').replace(/[^0-9A-Z]/gi, '').toUpperCase() 
-        })).filter(r => r.code.length >= 4);
+    // 1. Yahooファイナンスで上場企業の証券コード(.T)を検索 (ソニー生命等の非上場はここで弾かれます)
+    const searchRes = await fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}`);
+    const searchData = await searchRes.json();
+    
+    let candidates = [];
+    if (searchData.quotes && searchData.quotes.length > 0) {
+        candidates = searchData.quotes
+            .filter(q => q.symbol && q.symbol.endsWith('.T'))
+            .map(q => q.symbol.replace('.T', ''));
     }
 
-    cache.set(cacheKey, { v: results, t: Date.now() });
-    return res.json({ success: true, results });
+    // 2. Yahooで見つからない場合のみ、AIに推測させる（奥の手）
+    if (candidates.length === 0) {
+        const prompt = `「${query}」に関連する「日本の上場企業」の証券コード(4桁の英数字)を最大3つ挙げてください。出力例: {"codes": ["7203", "6758"]}`;
+        const aiResp = await chatJSON(prompt);
+        if (aiResp && Array.isArray(aiResp.codes)) {
+            candidates = aiResp.codes.map(c => String(c).replace(/[^0-9A-Z]/gi, '').toUpperCase());
+        }
+    }
+
+    // 3. 最後の絶対防衛ライン：株探(かぶたん)にアクセスして「実在するか」確認し、100%正確な日本語の社名を取得する
+    let verifiedResults = [];
+    const uniqueCodes = new Set();
+
+    // AIがデタラメなコードを出しても、株探に存在しなければここで自動的に消去されます
+    for (const code of candidates) {
+        if (!code || uniqueCodes.has(code) || code.length < 4) continue;
+        uniqueCodes.add(code);
+        
+        try {
+            const kabutanRes = await fetch(`https://kabutan.jp/stock/?code=${code}`);
+            if (kabutanRes.ok) {
+                const html = await kabutanRes.text();
+                // <title>ソニーグループ【6758】株の基本情報｜株探（かぶたん）</title> から社名だけを抽出
+                const titleMatch = html.match(/<title>(.*?)【/);
+                if (titleMatch && titleMatch[1]) {
+                    verifiedResults.push({
+                        name: titleMatch[1].trim(), // 正確な日本語名（TIMEE INC→タイミー等もここで解決）
+                        code: code
+                    });
+                }
+            }
+        } catch (e) {
+            console.warn("株探 verification error:", code);
+        }
+        
+        if (verifiedResults.length >= 5) break; // 最大5件でストップ
+    }
+
+    cache.set(cacheKey, { v: verifiedResults, t: Date.now() });
+    return res.json({ success: true, results: verifiedResults });
   } catch (e) {
     console.error('search-code error', e?.message || e);
     return res.status(500).json({ error: '検索エラーが発生しました' });
