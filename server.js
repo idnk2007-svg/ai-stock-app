@@ -1,4 +1,4 @@
-const express = require('express');
+onst express = require('express');
 const cors = require('cors');
 const { OpenAI } = require('openai');
 
@@ -10,61 +10,27 @@ app.use(express.json());
 app.use(express.static('public'));
 
 const groq = new OpenAI({
-  apiKey: process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY,
+  apiKey: process.env.GROQ_API_KEY,
   baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
 });
 
 const cache = new Map();
-const CACHE_DURATION = 1000 * 60 * 60 * 12;
-
-const FALLBACK_TICKERS = {
-  'トヨタ自動車': '7203',
-  'トヨタ自動車株式会社': '7203',
-  'トヨタ': '7203',
-  'ソニーグループ': '6758',
-  'ソニー': '6758',
-  '任天堂': '7974',
-  '日立製作所': '6501',
-  '東京エレクトロン': '8035',
-  '三菱商事': '8058',
-  '三井物産': '8031',
-  'ソフトバンクグループ': '9984',
-  '楽天グループ': '4755',
-  '楽天': '4755',
-  'paypay': '3988',
-  'paypay株式会社': '3988',
-};
-
-function normalizeText(value) {
-  if (!value) return '';
-  return String(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9\u3041-\u3096\u30a1-\u30f6\u4e00-\u9fff]/g, '');
-}
+const CACHE_DURATION = 1000 * 60 * 60 * 12; // 12時間キャッシュ
 
 function safeParse(content) {
   if (!content) return null;
   if (typeof content === 'object') return content;
-  if (typeof content !== 'string') return null;
-
-  const s = content.trim();
-  const fenced = s.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  const target = fenced ? fenced[1] : s;
-
-  try {
-    return JSON.parse(target);
-  } catch (e) {}
-
-  try {
-    const objMatch = target.match(/\{[\s\S]*\}/);
-    if (objMatch) return JSON.parse(objMatch[0]);
-  } catch (e) {}
-
-  try {
-    const arrMatch = target.match(/\[[\s\S]*\]/);
-    if (arrMatch) return JSON.parse(arrMatch[0]);
-  } catch (e) {}
-
+  if (typeof content === 'string') {
+    try {
+      return JSON.parse(content);
+    } catch (e) {
+      const m = content.match(/\{[\s\S]*\}/);
+      if (m) {
+        try { return JSON.parse(m[0]); } catch (e2) { return null; }
+      }
+      return null;
+    }
+  }
   return null;
 }
 
@@ -73,113 +39,56 @@ async function chatJSON(prompt, model = 'llama-3.3-70b-versatile') {
     const resp = await groq.chat.completions.create({
       messages: [{ role: 'user', content: prompt }],
       model,
+      // Groqの仕様: json_objectを使う場合は必ずプロンプト内でJSONの形を指定する
       response_format: { type: 'json_object' },
     });
-
-    const raw =
-      resp?.choices?.[0]?.message?.content ||
-      resp?.output_text ||
-      '';
-
-    const parsed = safeParse(raw);
-    return parsed ?? raw;
+    const raw = resp?.choices?.[0]?.message?.content;
+    return safeParse(raw) || raw;
   } catch (e) {
-    try {
-      const resp = await groq.chat.completions.create({
-        messages: [{ role: 'user', content: prompt }],
-        model,
-      });
-
-      const raw =
-        resp?.choices?.[0]?.message?.content ||
-        resp?.output_text ||
-        '';
-
-      const parsed = safeParse(raw);
-      return parsed ?? raw;
-    } catch (e2) {
-      console.error('chatJSON error', e2?.message || e2);
-      return null;
-    }
+    console.error('chatJSON error', e?.message || e);
+    return null;
   }
 }
 
 function extractTickerFromQuery(q) {
   if (!q) return '';
-  const onlyNum = String(q).replace(/[^0-9]/g, '');
-  return onlyNum || '';
-}
-
-function getFallbackResults(query) {
-  const normalizedQuery = normalizeText(query);
-  const results = [];
-
-  for (const [name, ticker] of Object.entries(FALLBACK_TICKERS)) {
-    const normalizedName = normalizeText(name);
-    if (
-      normalizedName === normalizedQuery ||
-      normalizedName.includes(normalizedQuery) ||
-      normalizedQuery.includes(normalizedName)
-    ) {
-      results.push({ companyName: name, ticker });
-    }
-  }
-
-  return results;
-}
-
-async function lookupTickerWithAI(nameOrQuery) {
-  if (!nameOrQuery) return '';
-
-  const fallbackResults = getFallbackResults(nameOrQuery);
-  if (fallbackResults.length > 0) {
-    return fallbackResults[0].ticker;
-  }
-
-  const prompt = `次の会社名に対応する日本の上場証券コード（数字のみ）をJSONで返してください。会社名: "${nameOrQuery}"。出力例: {"ticker":"7203"}`;
-  const res = await chatJSON(prompt);
-
-  if (Array.isArray(res) && res.length > 0) {
-    const first = res[0];
-    const found = first?.ticker || first?.code || first?.証券コード || first?.tickerCode;
-    if (found) return String(found).replace(/[^0-9]/g, '');
-  }
-
-  if (res && typeof res === 'object') {
-    const found =
-      res?.ticker ||
-      res?.code ||
-      res?.証券コード ||
-      res?.tickerCode ||
-      (res.results && res.results[0] && (res.results[0].ticker || res.results[0].code));
-
-    if (found) return String(found).replace(/[^0-9]/g, '');
-  }
-
-  if (typeof res === 'string') {
-    const m = res.match(/(\d{3,6})/);
-    if (m) return m[1];
-  }
-
+  const onlyNum = String(q).replace(/[^0-9A-Za-z]/g, '');
+  if (onlyNum.length >= 4) return onlyNum.toUpperCase();
   return '';
 }
 
+// 会社名から証券コードを推測する補助関数
+async function lookupTickerWithAI(nameOrQuery) {
+  if (!nameOrQuery) return '';
+  const prompt = `次の会社名に対応する日本の上場証券コード（4桁の数字または英数字）を特定してください。会社名: "${nameOrQuery}"。必ず以下のJSON形式で出力してください。{"code":"7203"}`;
+  const res = await chatJSON(prompt);
+  const found = res?.code || res?.ticker || res?.証券コード;
+  if (!found) return '';
+  return String(found).replace(/[^0-9A-Za-z]/g, '').toUpperCase();
+}
+
 app.post('/api/analyze', async (req, res) => {
-  const { query, companyName } = req.body || {};
+  const { query } = req.body || {};
   let ticker = extractTickerFromQuery(query);
 
+  // もし数字が入力されていなければ（直接「トヨタ」などと検索された場合）、AIでコードを特定する
+  if (!ticker && query) {
+    ticker = await lookupTickerWithAI(query);
+  }
+
   if (!ticker) {
-    ticker = await lookupTickerWithAI(companyName || query);
+    return res.status(400).json({ error: '証券コードを特定できませんでした。別のキーワードでお試しください。' });
   }
 
   try {
-    const promptText = `証券コード「${ticker || '不明'}」の企業について分析してください。
+    const promptText = `日本の証券コード「${ticker}」の企業について分析してください。
 【重要ルール】
-・企業名は必ず「${companyName || '対象の日本企業'}」という正式名称を使用してください。
-・分析結果は必ず指定のJSON形式で出力してください。
+・「companyName」には、証券コード${ticker}に対応する「実際の正式な企業名」を必ず日本語で入れてください（例：トヨタ自動車株式会社、ソニーグループなど。"対象の日本企業"のようなプレースホルダーは絶対に使用しないでください）。
+・「tickerCode」は必ず "${ticker}" としてください。
+・分析結果は必ず以下のJSON形式で出力してください。
 {
-  "companyName": "${companyName || '対象の日本企業'}",
-  "tickerCode": "${ticker || ''}",
+  "companyName": "実際の正式な企業名",
+  "tickerCode": "${ticker}",
   "currentPrice": 0,
   "changeText": "0 (0%)",
   "isPositive": true,
@@ -198,17 +107,16 @@ app.post('/api/analyze', async (req, res) => {
     const chatResp = await chatJSON(promptText);
     let parsedData = chatResp;
 
-    if (Array.isArray(parsedData)) parsedData = parsedData[0];
-
     if (!parsedData || typeof parsedData !== 'object') {
-      console.error('analyze: unexpected AI response', chatResp);
       return res.status(500).json({ error: 'AIからの解析結果が取得できませんでした' });
     }
 
-    const code = String(parsedData.tickerCode || ticker || '').replace(/[^0-9]/g, '');
+    const code = String(parsedData.tickerCode || ticker).replace(/[^0-9A-Za-z]/g, '');
     if (code) {
       try {
-        const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${code}.T`);
+        // Yahooファイナンスからリアルタイム株価を上書き取得
+        const fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(code) ? `${code}.T` : code;
+        const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${fetchSymbol}`);
         const priceData = await priceRes.json();
         const meta = priceData?.chart?.result?.[0]?.meta;
         if (meta?.regularMarketPrice) {
@@ -242,52 +150,27 @@ app.post('/api/search-code', async (req, res) => {
   }
 
   try {
-    let results = getFallbackResults(query);
+    // 【修正点】Groqのエラーを防ぐため、必ず "results" というキーを持ったオブジェクト形式で出力させる
+    const prompt = `ユーザーが「${query}」と検索しました。これに関連する日本の上場企業を最大5社挙げてください。
+必ず以下のJSON形式で返してください。JSON以外は絶対に何も出力しないでください。
+{"results": [{"name": "正式な会社名", "code": "証券コード(数字のみ)"}]}`;
 
-    if (results.length === 0) {
-      const prompt = `「${query}」に関連する日本の上場企業を最大5社挙げてください。必ず「正式な会社名」と「正しい証券コード(数字のみ)」をJSON配列で返してください。出力例: [{"companyName":"トヨタ自動車株式会社","ticker":"7203"}]。JSON以外は何も出力しないでください。`;
-
-      const aiResp = await chatJSON(prompt);
-
-      if (Array.isArray(aiResp)) {
-        results = aiResp
-          .map(item => ({
-            companyName: item.companyName || item.name || item.会社名,
-            ticker: String(item.ticker || item.code || item.証券コード || '').replace(/[^0-9]/g, ''),
-          }))
-          .filter(r => r.ticker);
-      } else if (aiResp && typeof aiResp === 'object') {
-        const arr =
-          aiResp.results && Array.isArray(aiResp.results)
-            ? aiResp.results
-            : Object.values(aiResp).filter(v => typeof v === 'object');
-
-        if (Array.isArray(arr)) {
-          results = arr
-            .map(item => ({
-              companyName: item.companyName || item.name || item.会社名,
-              ticker: String(item.ticker || item.code || item.証券コード || '').replace(/[^0-9]/g, ''),
-            }))
-            .filter(r => r.ticker);
-        }
-      } else if (typeof aiResp === 'string') {
-        const parsed = safeParse(aiResp);
-        if (Array.isArray(parsed)) {
-          results = parsed
-            .map(item => ({
-              companyName: item.companyName || item.name || item.会社名,
-              ticker: String(item.ticker || item.code || item.証券コード || '').replace(/[^0-9]/g, ''),
-            }))
-            .filter(r => r.ticker);
-        }
-      }
+    const aiResp = await chatJSON(prompt);
+    let results = [];
+    
+    // AIの返答から配列を取り出して、フロントエンドが求める形（name, code）に整える
+    if (aiResp && Array.isArray(aiResp.results)) {
+        results = aiResp.results.map(item => ({ 
+            name: item.name || item.companyName || '名称不明', 
+            code: String(item.code || item.ticker || '').replace(/[^0-9A-Za-z]/g, '') 
+        })).filter(r => r.code);
     }
 
     cache.set(cacheKey, { v: results, t: Date.now() });
     return res.json({ success: true, results });
   } catch (e) {
     console.error('search-code error', e?.message || e);
-    return res.status(500).json({ error: '検索エラー' });
+    return res.status(500).json({ error: '検索エラーが発生しました' });
   }
 });
 
