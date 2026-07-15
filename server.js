@@ -32,41 +32,45 @@ app.post('/api/analyze', async (req, res) => {
     }
 
     try {
-        // 2. Yahooファイナンス検索で、コード(215Aなど)から正しい会社名(TIMEE)を先に割り出す
-        let actualCompanyName = query;
-        let yahooSymbol = "";
+        // 2. 入力が「証券コード」か「企業名」かを判定する
+        // 日本語は消去して英数字だけ残す
+        const cleanQuery = query.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
+        // 4桁のコード（例: 7203, 215A）だけで検索されたか判定
+        const isCodeQuery = /^[0-9][0-9A-Z]{3}$/.test(cleanQuery);
         
-        try {
-            const searchRes = await fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}`);
-            if (searchRes.ok) {
-                const searchData = await searchRes.json();
-                if (searchData.quotes && searchData.quotes.length > 0) {
-                    const quote = searchData.quotes[0];
-                    // 英名や正式名称を取得してAIの誤認を防ぐ
-                    actualCompanyName = quote.longname || quote.shortname || query;
-                    yahooSymbol = quote.symbol; 
+        let actualCompanyName = query;
+        let finalTicker = "";
+
+        // コード検索(例: 215A)の場合のみ、AIが勘違いしないようYahooから英語名を取得しておく
+        if (isCodeQuery) {
+            finalTicker = cleanQuery;
+            try {
+                const searchRes = await fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${finalTicker}.T`);
+                if (searchRes.ok) {
+                    const searchData = await searchRes.json();
+                    if (searchData.quotes && searchData.quotes.length > 0) {
+                        const quote = searchData.quotes[0];
+                        actualCompanyName = quote.longname || quote.shortname || query;
+                    }
                 }
+            } catch (e) {
+                console.error("Name fetch error:", e);
             }
-        } catch (e) {
-            console.error("Name fetch error:", e);
         }
 
-        // 証券コードを確実に英数字として確定させる（Yahooで見つからなかった場合は空文字にする）
-        const finalTicker = yahooSymbol ? yahooSymbol.replace('.T', '') : "";
-
-        // 3. 確定した会社名を使ってGroqに分析させる
+        // 3. 確定した情報を使ってGroqに分析させる
         const promptText = `
-            ユーザーが株式「${actualCompanyName} (検索クエリ: ${query})」について検索しました。
+            ユーザーが日本の株式「${actualCompanyName} (元の検索キーワード: ${query})」について検索しました。
             この企業に関する最新の動向、関連ニュース、主要指標を分析してください。
 
             【重要ルール】
-            ・「companyName」は必ず日本の正式名称（例：株式会社タイミーなど）に翻訳して出力してください。
-            ・「tickerCode」には、この企業の日本の証券コード（半角英数字、例: 7203, 215A など）を必ず出力してください。
+            ・「companyName」は必ず日本の正式名称（例：株式会社タイミー、ユニチカ株式会社、ソニーグループなど）で出力してください。
+            ・「tickerCode」は半角英数字を出力してください。${isCodeQuery ? `ユーザーが指定した証券コード「${finalTicker}」を必ずそのまま出力し、絶対に変更しないでください。` : `この企業の証券コードを推測して出力してください（例: 3103, 7203など）。`}
 
             以下のJSON形式のみで回答してください。JSON以外は一切出力しないでください。
             {
                 "companyName": "企業名の日本語表記",
-                "tickerCode": "${finalTicker ? finalTicker : "ここに証券コードを推測して出力"}",
+                "tickerCode": "${isCodeQuery ? finalTicker : "ここに証券コードを推測して出力"}",
                 "currentPrice": 0,
                 "changeText": "0 (0%)",
                 "isPositive": true,
@@ -104,21 +108,18 @@ app.post('/api/analyze', async (req, res) => {
         text = text.substring(start, end);
         let parsedData = JSON.parse(text);
 
-        // ★絶対防衛ライン: Yahooから取得できた場合は上書き。取得できなかった場合はAIの推測を採用し、英数字のみに整形。
-        if (finalTicker) {
+        // ★絶対防衛ライン: コード検索だった場合は絶対にそのコードを維持、名前検索の場合はAIの推測を採用
+        if (isCodeQuery) {
             parsedData.tickerCode = finalTicker;
         } else {
             parsedData.tickerCode = String(parsedData.tickerCode || "").replace(/[^0-9A-Za-z]/g, '').toUpperCase();
         }
 
-        // 4. Yahooファイナンスからリアルタイムの株価を取得して上書き（TradingViewと一致させる）
+        // 4. Yahooファイナンスからリアルタイムの株価を取得して上書き
         try {
-            let fetchSymbol = yahooSymbol;
-            if (!fetchSymbol && parsedData.tickerCode) {
-                // AIが推測したコードを使ってYahooから株価を取得する
-                const cleanCode = parsedData.tickerCode;
-                fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(cleanCode) ? `${cleanCode}.T` : cleanCode;
-            }
+            const cleanCode = parsedData.tickerCode;
+            // 日本株のコード(数字始まりの4桁)なら .T をつける
+            const fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(cleanCode) ? `${cleanCode}.T` : cleanCode;
 
             if (fetchSymbol) {
                 const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${fetchSymbol}`, {
