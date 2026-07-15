@@ -40,11 +40,29 @@
                         分析
                     </button>
                 </form>
-                <!-- ★ここが追加された天才的なアイデアの部分です！★ -->
-                <div class="text-right px-1">
-                    <a href="https://finance.yahoo.co.jp/" target="_blank" rel="noopener noreferrer" class="text-xs text-blue-400 hover:text-blue-300 transition-colors inline-flex items-center gap-1">
-                        <i class="fa-solid fa-arrow-up-right-from-square"></i> 証券コードが分からない場合はこちら
-                    </a>
+                
+                <!-- ★ここを「アプリ内検索窓を開くボタン」に変更 -->
+                <div class="text-right px-1 mt-1">
+                    <button type="button" id="toggleCodeSearchBtn" class="text-xs text-blue-400 hover:text-blue-300 transition-colors inline-flex items-center gap-1">
+                        <i class="fa-solid fa-magnifying-glass"></i> 会社名から証券コードを検索する
+                    </button>
+                </div>
+
+                <!-- ★新機能：会社名検索のミニウインドウ（初期は非表示） -->
+                <div id="codeSearchArea" class="hidden mt-2 p-4 bg-slate-900 border border-slate-700 rounded-xl shadow-inner">
+                    <div class="flex gap-2 mb-2">
+                        <input type="text" id="codeSearchInput" placeholder="会社名を入力 (例: トヨタ, ソニー)" 
+                            class="w-full pl-3 pr-3 py-2 text-sm bg-slate-800 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all">
+                        <button type="button" id="execCodeSearchBtn" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap">
+                            検索
+                        </button>
+                    </div>
+                    <div id="codeSearchResults" class="space-y-1 max-h-40 overflow-y-auto">
+                        <!-- ここに検索結果のリストが入ります -->
+                    </div>
+                    <div id="codeSearchLoading" class="hidden text-center py-2 text-slate-400 text-xs">
+                        <i class="fa-solid fa-spinner fa-spin mr-1"></i> 検索中...
+                    </div>
                 </div>
             </div>
         </div>
@@ -194,6 +212,74 @@
 
         let currentTickerCode = null;
         let searchHistory = JSON.parse(localStorage.getItem('stockSearchHistory') || '[]');
+
+        // ★新機能：証券コード検索ミニウインドウの動作スクリプト
+        const toggleCodeSearchBtn = document.getElementById('toggleCodeSearchBtn');
+        const codeSearchArea = document.getElementById('codeSearchArea');
+        const codeSearchInput = document.getElementById('codeSearchInput');
+        const execCodeSearchBtn = document.getElementById('execCodeSearchBtn');
+        const codeSearchResults = document.getElementById('codeSearchResults');
+        const codeSearchLoading = document.getElementById('codeSearchLoading');
+
+        // ボタンを押したらミニウインドウを開閉
+        toggleCodeSearchBtn.addEventListener('click', () => {
+            codeSearchArea.classList.toggle('hidden');
+            if (!codeSearchArea.classList.contains('hidden')) {
+                codeSearchInput.focus();
+            }
+        });
+
+        // 検索実行
+        execCodeSearchBtn.addEventListener('click', async () => {
+            const q = codeSearchInput.value.trim();
+            if (!q) return;
+
+            codeSearchResults.innerHTML = '';
+            codeSearchLoading.classList.remove('hidden');
+
+            try {
+                const res = await fetch('/api/search-code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: q })
+                });
+                const data = await res.json();
+                
+                codeSearchLoading.classList.add('hidden');
+                
+                if (data.results && data.results.length > 0) {
+                    data.results.forEach(item => {
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'w-full text-left px-3 py-2 rounded-lg hover:bg-slate-800 transition-colors flex justify-between items-center group border border-transparent hover:border-slate-600';
+                        btn.innerHTML = `
+                            <span class="text-sm text-slate-200 group-hover:text-blue-400 transition-colors">${item.name}</span>
+                            <span class="text-xs font-bold text-blue-500 bg-blue-900/30 px-2 py-1 rounded border border-blue-800/50">${item.code}</span>
+                        `;
+                        // 候補をクリックしたら、メインの検索窓に入力して自動で分析スタート
+                        btn.onclick = () => {
+                            searchInput.value = item.code;
+                            codeSearchArea.classList.add('hidden');
+                            searchForm.dispatchEvent(new Event('submit'));
+                        };
+                        codeSearchResults.appendChild(btn);
+                    });
+                } else {
+                    codeSearchResults.innerHTML = '<p class="text-xs text-slate-400 p-2 text-center">見つかりませんでした。別のキーワードでお試しください。</p>';
+                }
+            } catch (err) {
+                codeSearchLoading.classList.add('hidden');
+                codeSearchResults.innerHTML = '<p class="text-xs text-red-400 p-2 text-center">エラーが発生しました。</p>';
+            }
+        });
+
+        // エンターキーで検索実行
+        codeSearchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                execCodeSearchBtn.click();
+            }
+        });
 
         function renderHistory() {
             if (searchHistory.length === 0) {
