@@ -23,7 +23,6 @@ app.post('/api/analyze', async (req, res) => {
     const { query } = req.body;
     const normalizedQuery = query.toLowerCase().trim();
     
-    // 1. キャッシュの確認
     if (cache.has(normalizedQuery)) {
         const cachedItem = cache.get(normalizedQuery);
         if (Date.now() - cachedItem.timestamp < CACHE_DURATION) {
@@ -32,7 +31,6 @@ app.post('/api/analyze', async (req, res) => {
     }
 
     try {
-        // 2. Yahooファイナンス検索で、コードから正しい会社名を先に割り出す
         let actualCompanyName = query;
         let yahooSymbol = "";
         
@@ -46,25 +44,16 @@ app.post('/api/analyze', async (req, res) => {
                     yahooSymbol = quote.symbol; 
                 }
             }
-        } catch (e) {
-            console.error("Name fetch error:", e);
-        }
+        } catch (e) { console.error("Name fetch error:", e); }
 
-        // 証券コードを確実に英数字として確定させる
         const finalTicker = yahooSymbol ? yahooSymbol.replace('.T', '') : query.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
 
-        // 3. 確定した会社名を使ってGroqに分析させる
         const promptText = `
-            ユーザーが株式「${actualCompanyName} (検索クエリ: ${query})」について検索しました。
-            この企業に関する最新の動向、関連ニュース、主要指標を分析してください。
-
-            【重要ルール】
-            ・「companyName」は必ず日本の正式名称（例：株式会社タイミーなど）に翻訳して出力してください。
-            ・「tickerCode」は必ず "${finalTicker || query}" をそのまま使用し、書き換えないでください。
-
-            以下のJSON形式のみで回答してください。JSON以外は一切出力しないでください。
+            ユーザーが株式「${actualCompanyName}」について検索しました。
+            この企業に関する最新動向を分析し、JSONで出力してください。
+            【重要】tickerCodeは必ず "${finalTicker || query}" を使用してください。
             {
-                "companyName": "企業名の日本語表記",
+                "companyName": "企業名の日本語正式名称",
                 "tickerCode": "${finalTicker || query}",
                 "currentPrice": 0,
                 "changeText": "0 (0%)",
@@ -75,17 +64,10 @@ app.post('/api/analyze', async (req, res) => {
                 "volatilityLabel": "普通",
                 "industryGrowthIndex": 50,
                 "industryGrowthLabel": "安定",
-                "advancedMetrics": {
-                    "minimumInvestment": 0,
-                    "shareholderPerks": "なし",
-                    "perkRating": 0,
-                    "targetPrice": 0,
-                    "earningsDate": "未定"
-                },
-                "news": [{"title": "関連ニュースタイトル", "url": "#", "source": "ニュース元"}],
+                "news": [{"title": "関連ニュース", "url": "#", "source": "メディア名"}],
                 "fundamentals": {"per": "-", "perEvaluation": "適正", "pbr": "-", "pbrEvaluation": "適正", "dividendYield": "-", "yieldEvaluation": "適正"},
-                "analysis": "企業の現状と今後の動向についての詳細な分析コメントを記載してください。",
-                "riskFactor": "投資に関するリスクや懸念事項を記載してください。"
+                "analysis": "分析コメント",
+                "riskFactor": "リスク要因"
             }
         `;
 
@@ -95,90 +77,53 @@ app.post('/api/analyze', async (req, res) => {
             response_format: { type: "json_object" },
         });
 
-        let text = chatCompletion.choices[0].message.content;
-        
-        // 確実なJSONパース (余計な文字を削る)
-        const start = text.indexOf('{');
-        const end = text.lastIndexOf('}') + 1;
-        text = text.substring(start, end);
-        let parsedData = JSON.parse(text);
-
-        // 絶対防衛ライン: AIが何を返してきても、ここで正しい証券コードを強制上書きする！
+        let parsedData = JSON.parse(chatCompletion.choices[0].message.content);
         parsedData.tickerCode = finalTicker || query;
 
-        // 4. Yahooファイナンスからリアルタイムの株価を取得して上書き（TradingViewと一致させる）
+        // 株価取得
         try {
-            let fetchSymbol = yahooSymbol;
-            if (!fetchSymbol) {
-                const cleanCode = query.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
-                fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(cleanCode) ? `${cleanCode}.T` : cleanCode;
-            }
-
+            const fetchSymbol = yahooSymbol || (query.match(/^\d+$/) ? `${query}.T` : "");
             if (fetchSymbol) {
-                const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${fetchSymbol}`, {
-                    headers: { 'User-Agent': 'Mozilla/5.0' }
-                });
-                
-                if (priceRes.ok) {
-                    const priceData = await priceRes.json();
-                    const meta = priceData?.chart?.result?.[0]?.meta;
-                    if (meta && meta.regularMarketPrice) {
-                        const currentPrice = meta.regularMarketPrice;
-                        const previousClose = meta.chartPreviousClose;
-                        
-                        // 正確な金額に上書き
-                        parsedData.currentPrice = currentPrice;
-                        
-                        if (previousClose) {
-                            const diff = currentPrice - previousClose;
-                            const diffPercent = (diff / previousClose) * 100;
-                            parsedData.isPositive = diff >= 0;
-                            const sign = diff >= 0 ? '+' : '';
-                            parsedData.changeText = `${sign}${diff.toFixed(1)} (${sign}${diffPercent.toFixed(2)}%)`;
-                        }
-                    }
+                const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${fetchSymbol}`);
+                const priceData = await priceRes.json();
+                const meta = priceData?.chart?.result?.[0]?.meta;
+                if (meta?.regularMarketPrice) {
+                    parsedData.currentPrice = meta.regularMarketPrice;
+                    const diff = meta.regularMarketPrice - meta.chartPreviousClose;
+                    parsedData.changeText = `${diff >= 0 ? '+' : ''}${diff.toFixed(1)} (${((diff/meta.chartPreviousClose)*100).toFixed(2)}%)`;
                 }
             }
-        } catch (priceErr) {
-            console.error("Price overwrite error:", priceErr);
-        }
+        } catch(e) {}
 
-        // 5. 結果を保存してブラウザに返す
         cache.set(normalizedQuery, { timestamp: Date.now(), data: parsedData });
         res.json({ success: true, data: parsedData });
-
     } catch (err) {
-        console.error("Analysis Error:", err);
-        res.status(500).json({ error: "分析に失敗しました。詳細: " + err.message });
+        res.status(500).json({ error: "分析失敗" });
     }
 });
 
-// ★新機能：会社名から証券コードを検索する専用API
+// ★AIハイブリッド版：コード検索API
 app.post('/api/search-code', async (req, res) => {
     const { query } = req.body;
-    if (!query) return res.json({ success: true, results: [] });
-
     try {
         const searchRes = await fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}`);
-        if (!searchRes.ok) throw new Error("検索に失敗しました");
         const searchData = await searchRes.json();
-        
-        let results = [];
-        if (searchData.quotes && searchData.quotes.length > 0) {
-            // 日本の銘柄（末尾が.Tのもの）だけを抽出してリスト化
-            results = searchData.quotes
-                .filter(q => q.symbol && q.symbol.endsWith('.T'))
-                .map(q => ({
-                    code: q.symbol.replace('.T', ''),
-                    name: q.longname || q.shortname || '名称不明'
-                }));
+        let results = searchData.quotes?.filter(q => q.symbol && q.symbol.endsWith('.T'))
+            .map(q => ({ code: q.symbol.replace('.T', ''), name: q.longname || q.shortname })) || [];
+
+        // Yahooで見つからない場合、AIに聞く
+        if (results.length === 0) {
+            const prompt = `「${query}」に関連する日本の企業名と4桁の証券コードを最大5件、JSON {"results": [{"code": "数字", "name": "名前"}]} で出力してください。`;
+            const completion = await groq.chat.completions.create({
+                messages: [{ role: "user", content: prompt }],
+                model: "llama-3.3-70b-versatile",
+                response_format: { type: "json_object" },
+            });
+            const aiData = JSON.parse(completion.choices[0].message.content);
+            results = aiData.results || [];
         }
-        // 最大5件を返す
         res.json({ success: true, results: results.slice(0, 5) });
-    } catch (e) {
-        console.error("Code search error:", e);
-        res.status(500).json({ error: "検索エラー" });
-    }
+    } catch (e) { res.status(500).json({ error: "検索エラー" }); }
 });
 
 app.listen(port, () => console.log(`Server started on port ${port}`));
