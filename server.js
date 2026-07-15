@@ -1,4 +1,3 @@
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { OpenAI } = require('openai');
@@ -84,7 +83,6 @@ app.post('/api/analyze', async (req, res) => {
       return res.status(500).json({ error: 'AIからの解析結果が取得できませんでした' });
     }
 
-    // Fetch current price if ticker available
     if (parsedData.tickerCode || ticker) {
       const code = String(parsedData.tickerCode || ticker).replace(/[^0-9]/g, '');
       try {
@@ -115,7 +113,6 @@ app.post('/api/search-code', async (req, res) => {
   const { query } = req.body || {};
   if (!query) return res.status(400).json({ error: 'query is required' });
 
-  // simple cache
   const cacheKey = `search:${query}`;
   const cached = cache.get(cacheKey);
   if (cached && (Date.now() - cached.t) < CACHE_DURATION) {
