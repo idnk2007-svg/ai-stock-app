@@ -54,10 +54,10 @@ app.post('/api/analyze', async (req, res) => {
         // 3. 確定した会社名を使ってGroqに分析させる
         const promptText = `
             ユーザーが株式「${actualCompanyName} (検索クエリ: ${query})」について検索しました。
-            この企業に関する最新の動向、関連ニュース、主要指標を分析してください。
+            この企業に関する最新の動向、関連ニュース、主要指標を分析してください。企業名（companyName）は必ず日本の正式名称（カタカナや漢字など）に翻訳して出力してください。
             以下のJSON形式のみで回答してください。JSON以外は一切出力しないでください。
             {
-                "companyName": "${actualCompanyName}",
+                "companyName": "企業名の日本語表記（例：株式会社タイミー、トヨタ自動車など）",
                 "tickerCode": "${yahooSymbol ? yahooSymbol.replace('.T', '') : query}",
                 "currentPrice": 0,
                 "changeText": "0 (0%)",
