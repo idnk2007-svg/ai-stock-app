@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { OpenAI } = require('openai');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -9,28 +9,30 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const cache = new Map(); // 検索結果を一時保存する場所
-const CACHE_DURATION = 1000 * 60 * 60 * 12; // 12時間のキャッシュ有効期限
+// Groq APIクライアントの設定
+const groq = new OpenAI({
+    apiKey: process.env.GROQ_API_KEY,
+    baseURL: "https://api.groq.com/openai/v1"
+});
+
+const cache = new Map();
+const CACHE_DURATION = 1000 * 60 * 60 * 12;
 
 app.post('/api/analyze', async (req, res) => {
     const { query } = req.body;
     const normalizedQuery = query.toLowerCase().trim();
     
-    // 1. キャッシュチェック
     if (cache.has(normalizedQuery)) {
         const cachedItem = cache.get(normalizedQuery);
         if (Date.now() - cachedItem.timestamp < CACHE_DURATION) {
-            console.log(`Cache hit for: ${normalizedQuery}`);
             return res.json({ success: true, data: cachedItem.data, fromCache: true });
         }
     }
 
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash" });
-        
         const promptText = `
             ユーザーが日本の株式「${query}」について検索しました。
+            最新の株価、関連ニュース、主要指標を取得して分析してください。
             以下のJSON形式のみで回答してください。JSON以外は一切出力しないでください。
             {
                 "companyName": "string",
@@ -58,23 +60,18 @@ app.post('/api/analyze', async (req, res) => {
             }
         `;
 
-        const result = await model.generateContent(promptText);
-        let text = result.response.text();
-        
-        const start = text.indexOf('{');
-        const end = text.lastIndexOf('}') + 1;
-        text = text.substring(start, end);
-        
-        let parsedData = JSON.parse(text);
+        const chatCompletion = await groq.chat.completions.create({
+            messages: [{ role: "user", content: promptText }],
+            model: "llama-3.3-70b-versatile",
+            response_format: { type: "json_object" },
+        });
+
+        let parsedData = JSON.parse(chatCompletion.choices[0].message.content);
 
         try {
             const cleanTickerCode = (parsedData.tickerCode || '').toString().replace(/[^0-9A-Za-z]/g, '').toUpperCase();
             if (cleanTickerCode) {
-                let yahooSymbol = cleanTickerCode;
-                if (/^[0-9][0-9A-Z]{3}$/.test(cleanTickerCode)) {
-                    yahooSymbol = `${cleanTickerCode}.T`;
-                }
-                
+                let yahooSymbol = /^[0-9]/.test(cleanTickerCode) ? `${cleanTickerCode}.T` : cleanTickerCode;
                 const yahooRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${yahooSymbol}`, {
                     headers: { 'User-Agent': 'Mozilla/5.0' }
                 });
@@ -96,16 +93,14 @@ app.post('/api/analyze', async (req, res) => {
                     }
                 }
             }
-        } catch (priceErr) {
-            console.error("Price fetch error:", priceErr);
-        }
+        } catch (priceErr) { console.error("Price fetch error:", priceErr); }
 
         cache.set(normalizedQuery, { timestamp: Date.now(), data: parsedData });
         res.json({ success: true, data: parsedData });
 
     } catch (err) {
         console.error("Analysis Error:", err);
-        res.status(500).json({ error: "分析に失敗しました。詳細: " + err.message });
+        res.status(500).json({ error: "分析に失敗しました。" });
     }
 });
 
