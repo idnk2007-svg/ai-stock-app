@@ -51,14 +51,22 @@ app.post('/api/analyze', async (req, res) => {
             console.error("Name fetch error:", e);
         }
 
+        // 証券コードを確実に英数字として確定させる
+        const finalTicker = yahooSymbol ? yahooSymbol.replace('.T', '') : query.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
+
         // 3. 確定した会社名を使ってGroqに分析させる
         const promptText = `
             ユーザーが株式「${actualCompanyName} (検索クエリ: ${query})」について検索しました。
-            この企業に関する最新の動向、関連ニュース、主要指標を分析してください。企業名（companyName）は必ず日本の正式名称（カタカナや漢字など）に翻訳して出力してください。
+            この企業に関する最新の動向、関連ニュース、主要指標を分析してください。
+
+            【重要ルール】
+            ・「companyName」は必ず日本の正式名称（例：株式会社タイミーなど）に翻訳して出力してください。
+            ・「tickerCode」は必ず "${finalTicker || query}" をそのまま使用し、書き換えないでください。
+
             以下のJSON形式のみで回答してください。JSON以外は一切出力しないでください。
             {
-                "companyName": "企業名の日本語表記（例：株式会社タイミー、トヨタ自動車など）",
-                "tickerCode": "${yahooSymbol ? yahooSymbol.replace('.T', '') : query}",
+                "companyName": "企業名の日本語表記",
+                "tickerCode": "${finalTicker || query}",
                 "currentPrice": 0,
                 "changeText": "0 (0%)",
                 "isPositive": true,
@@ -95,6 +103,9 @@ app.post('/api/analyze', async (req, res) => {
         const end = text.lastIndexOf('}') + 1;
         text = text.substring(start, end);
         let parsedData = JSON.parse(text);
+
+        // ★絶対防衛ライン: AIが何を返してきても、ここで正しい証券コードを強制上書きする！
+        parsedData.tickerCode = finalTicker || query;
 
         // 4. Yahooファイナンスからリアルタイムの株価を取得して上書き（TradingViewと一致させる）
         try {
