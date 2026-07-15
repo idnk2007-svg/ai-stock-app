@@ -51,8 +51,8 @@ app.post('/api/analyze', async (req, res) => {
             console.error("Name fetch error:", e);
         }
 
-        // 証券コードを確実に英数字として確定させる
-        const finalTicker = yahooSymbol ? yahooSymbol.replace('.T', '') : query.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
+        // 証券コードを確実に英数字として確定させる（Yahooで見つからなかった場合は空文字にする）
+        const finalTicker = yahooSymbol ? yahooSymbol.replace('.T', '') : "";
 
         // 3. 確定した会社名を使ってGroqに分析させる
         const promptText = `
@@ -61,12 +61,12 @@ app.post('/api/analyze', async (req, res) => {
 
             【重要ルール】
             ・「companyName」は必ず日本の正式名称（例：株式会社タイミーなど）に翻訳して出力してください。
-            ・「tickerCode」は必ず "${finalTicker || query}" をそのまま使用し、書き換えないでください。
+            ・「tickerCode」には、この企業の日本の証券コード（半角英数字、例: 7203, 215A など）を必ず出力してください。
 
             以下のJSON形式のみで回答してください。JSON以外は一切出力しないでください。
             {
                 "companyName": "企業名の日本語表記",
-                "tickerCode": "${finalTicker || query}",
+                "tickerCode": "${finalTicker ? finalTicker : "ここに証券コードを推測して出力"}",
                 "currentPrice": 0,
                 "changeText": "0 (0%)",
                 "isPositive": true,
@@ -104,14 +104,19 @@ app.post('/api/analyze', async (req, res) => {
         text = text.substring(start, end);
         let parsedData = JSON.parse(text);
 
-        // ★絶対防衛ライン: AIが何を返してきても、ここで正しい証券コードを強制上書きする！
-        parsedData.tickerCode = finalTicker || query;
+        // ★絶対防衛ライン: Yahooから取得できた場合は上書き。取得できなかった場合はAIの推測を採用し、英数字のみに整形。
+        if (finalTicker) {
+            parsedData.tickerCode = finalTicker;
+        } else {
+            parsedData.tickerCode = String(parsedData.tickerCode || "").replace(/[^0-9A-Za-z]/g, '').toUpperCase();
+        }
 
         // 4. Yahooファイナンスからリアルタイムの株価を取得して上書き（TradingViewと一致させる）
         try {
             let fetchSymbol = yahooSymbol;
-            if (!fetchSymbol) {
-                const cleanCode = query.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
+            if (!fetchSymbol && parsedData.tickerCode) {
+                // AIが推測したコードを使ってYahooから株価を取得する
+                const cleanCode = parsedData.tickerCode;
                 fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(cleanCode) ? `${cleanCode}.T` : cleanCode;
             }
 
