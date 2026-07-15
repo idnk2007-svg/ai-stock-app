@@ -17,18 +17,18 @@ const groq = new OpenAI({
 const cache = new Map();
 const CACHE_DURATION = 1000 * 60 * 60 * 12;
 
-// 1. 分析API: 指定された正確な証券コードと企業名のみで分析する
 app.post('/api/analyze', async (req, res) => {
-    const { query, companyName } = req.body; // 候補から選ばれた企業名を優先する
+    const { query, companyName } = req.body;
     const ticker = query.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
     
     try {
         const promptText = `
-            証券コード「${ticker}」(${companyName || '日本企業'}) について分析してください。
-            【重要】社名は必ず「${companyName || '対象企業'}」としてください。他の企業と混同は厳禁です。
-            以下のJSON形式のみで出力してください。
+            証券コード「${ticker}」の企業について分析してください。
+            【重要ルール】
+            ・企業名は必ず「${companyName || '対象の日本企業'}」という正式名称を使用してください。
+            ・分析結果は必ず指定のJSON形式で出力してください。
             {
-                "companyName": "${companyName || ticker}",
+                "companyName": "${companyName || '対象の日本企業'}",
                 "tickerCode": "${ticker}",
                 "currentPrice": 0,
                 "changeText": "0 (0%)",
@@ -41,8 +41,8 @@ app.post('/api/analyze', async (req, res) => {
                 "industryGrowthLabel": "安定",
                 "news": [{"title": "関連ニュース", "url": "#", "source": "メディア名"}],
                 "fundamentals": {"per": "-", "perEvaluation": "適正", "pbr": "-", "pbrEvaluation": "適正", "dividendYield": "-", "yieldEvaluation": "適正"},
-                "analysis": "分析コメント",
-                "riskFactor": "リスク要因"
+                "analysis": "企業の現状と今後の動向を詳しく分析してください。",
+                "riskFactor": "投資リスクや懸念事項を記載してください。"
             }
         `;
 
@@ -54,15 +54,17 @@ app.post('/api/analyze', async (req, res) => {
 
         let parsedData = JSON.parse(chatCompletion.choices[0].message.content);
         
-        // 株価取得 (Yahoo API)
         try {
             const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${ticker}.T`);
             const priceData = await priceRes.json();
             const meta = priceData?.chart?.result?.[0]?.meta;
             if (meta?.regularMarketPrice) {
                 parsedData.currentPrice = meta.regularMarketPrice;
-                const diff = meta.regularMarketPrice - (meta.chartPreviousClose || meta.regularMarketPrice);
-                parsedData.changeText = `${diff >= 0 ? '+' : ''}${diff.toFixed(1)} (${((diff/meta.chartPreviousClose)*100).toFixed(2)}%)`;
+                const prev = meta.chartPreviousClose || meta.regularMarketPrice;
+                const diff = meta.regularMarketPrice - prev;
+                const percent = (diff / prev) * 100;
+                parsedData.changeText = `${diff >= 0 ? '+' : ''}${diff.toFixed(1)} (${percent.toFixed(2)}%)`;
+                parsedData.isPositive = diff >= 0;
             }
         } catch(e) {}
 
@@ -72,13 +74,11 @@ app.post('/api/analyze', async (req, res) => {
     }
 });
 
-// 2. 検索API: AIを使って正確な証券コードと社名を取得
 app.post('/api/search-code', async (req, res) => {
     const { query } = req.body;
     try {
         const prompt = `「${query}」に関連する日本の上場企業を最大5社挙げてください。
-        必ず「正式な会社名」と「正しい証券コード(数字)」をJSON形式で返してください。
-        例: {"results": [{"code": "6758", "name": "ソニーグループ"}]}
+        必ず「正式な会社名」と「正しい証券コード(数字のみ)」をJSON形式で返してください。
         JSON以外は何も出力しないでください。`;
         
         const completion = await groq.chat.completions.create({
