@@ -15,9 +15,8 @@ const groq = new OpenAI({
 });
 
 const cache = new Map();
-const CACHE_DURATION = 1000 * 60 * 60 * 12; // 12時間
+const CACHE_DURATION = 1000 * 60 * 60 * 12;
 
-// ★普通のChromeブラウザのフリをしてアクセスブロックを回避する
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 function safeParse(content) {
@@ -37,11 +36,16 @@ function safeParse(content) {
   return null;
 }
 
+// ★修正点1：AIが安定してJSONを返すように「システム設定(temperature)」を厳格化
 async function chatJSON(prompt, model = 'llama-3.3-70b-versatile') {
   try {
     const resp = await groq.chat.completions.create({
-      messages: [{ role: 'user', content: prompt }],
+      messages: [
+        { role: 'system', content: 'You are a professional financial AI. You must output strictly valid JSON ONLY. Do not use markdown blocks like ```json.' },
+        { role: 'user', content: prompt }
+      ],
       model,
+      temperature: 0.1, // 数値がブレないよう、AIの温度感を一番低く（冷静に）設定
       response_format: { type: 'json_object' },
     });
     const raw = resp?.choices?.[0]?.message?.content;
@@ -55,7 +59,6 @@ async function chatJSON(prompt, model = 'llama-3.3-70b-versatile') {
 app.post('/api/analyze', async (req, res) => {
   const { query } = req.body || {};
   
-  // クエリから証券コード(4桁の英数字)を抽出
   const tickerMatch = String(query).match(/[0-9][0-9A-Z]{3}/i);
   let ticker = tickerMatch ? tickerMatch[0].toUpperCase() : '';
 
@@ -87,14 +90,12 @@ app.post('/api/analyze', async (req, res) => {
     console.warn("Kabutan fetch error", e);
   }
 
-  // ★Yahooファイナンスから実際の財務指標と株価を取得
   let realFundamentalsText = "データなし";
   let realPriceData = null;
   let rawFundamentals = { per: "-", pbr: "-", yield: "-" };
 
   try {
     const fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(ticker) ? `${ticker}.T` : ticker;
-    // v7/finance/quote APIを使って、株価だけでなくPERやPBRも一緒に取得
     const quoteRes = await fetch(`https://query2.finance.yahoo.com/v7/finance/quote?symbols=${fetchSymbol}`, { 
         headers: { 'User-Agent': USER_AGENT } 
     });
@@ -120,38 +121,32 @@ app.post('/api/analyze', async (req, res) => {
   }
 
   try {
-    // ★AIの「手抜き」を許さない、バラバラなサンプル数字を指定
     const promptText = `
     日本の証券コード「${ticker}」の企業（${exactCompanyName}）について分析してください。
     
     【現在の実際の財務データ（非常に重要）】
     ${realFundamentalsText}
-    ※AI自身の過去の記憶やイメージに頼らず、必ず上記の実際の財務データ（PER、PBRなど）を基準にして、現在の株価が割高か割安かを論理的かつ客観的に評価してください。
+    ※この実際のPERやPBRを見て、客観的に割安か割高かを判断し、スコアを計算してください。
     
-    【極めて重要なルール：必ず守ること】
-    1. 「companyName」には、必ず「${exactCompanyName}」を入れてください。
-    2. 「tickerCode」は必ず "${ticker}" としてください。
-    3. ★★★スコアの計算について（最重要）★★★
-       以下のJSONのお手本にある数値（例: 42, 15, 68など）は、単なるフォーマット例です。絶対にそのまま丸写ししないでください。
-       「tradingSignal」「fundamentalScore」「technicalScore」「volatilityIndex」「industryGrowthIndex」の5つの数値は、必ず【対象企業の実際のデータ（PERやチャート等）】に基づいて、あなたが独自に判断した【0〜100の整数】で算出して出力してください。（例：PERが60倍で極めて割高なら、fundamentalScoreは10や0にするなど）
-    4. 「fundamentals」の項目には、提供した実際の数値をそのまま出力し、評価（割安・適正・割高など）を付与してください。
+    【ルール】
+    ・出力は必ず以下のJSONフォーマットのみ。
+    ・「tradingSignal」「fundamentalScore」などの指数は、必ず対象企業のデータに基づき【0〜100の整数】であなた自身が計算して出力すること。
     
-    ・分析結果は必ず以下のJSON形式で出力してください。
     {
       "companyName": "${exactCompanyName}",
       "tickerCode": "${ticker}",
       "currentPrice": 0,
       "changeText": "0 (0%)",
       "isPositive": true,
-      "tradingSignal": 42,
+      "tradingSignal": 38,
       "tradingSignalLabel": "やや売り",
-      "fundamentalScore": 15,
+      "fundamentalScore": 12,
       "fundamentalLabel": "割高",
-      "technicalScore": 68,
+      "technicalScore": 76,
       "technicalLabel": "上昇トレンド",
-      "volatilityIndex": 85,
+      "volatilityIndex": 89,
       "volatilityLabel": "高リスク",
-      "industryGrowthIndex": 70,
+      "industryGrowthIndex": 65,
       "industryGrowthLabel": "成長期待",
       "news": [],
       "fundamentals": {"per": "${rawFundamentals.per}", "perEvaluation": "割高", "pbr": "${rawFundamentals.pbr}", "pbrEvaluation": "適正", "dividendYield": "${rawFundamentals.yield}", "yieldEvaluation": "低い"},
@@ -159,9 +154,13 @@ app.post('/api/analyze', async (req, res) => {
       "riskFactor": "投資リスクや懸念事項を記載してください。"
     }`;
 
-    const parsedData = await chatJSON(promptText) || {};
+    const parsedData = await chatJSON(promptText);
 
-    // 取得しておいた実際の株価データで上書き
+    // ★修正点2：AIが失敗した時に「50」でごまかさず、エラーとして弾き返す！
+    if (!parsedData || typeof parsedData.tradingSignal !== 'number') {
+        throw new Error('AIが指数の計算に失敗しました（AIサーバーの過負荷）。もう一度「分析」ボタンを押してください。');
+    }
+
     if (realPriceData && realPriceData.price) {
         parsedData.currentPrice = realPriceData.price;
         const prev = realPriceData.prev || realPriceData.price;
@@ -171,7 +170,6 @@ app.post('/api/analyze', async (req, res) => {
         parsedData.isPositive = diff >= 0;
     }
 
-    // ★Googleニュースから本物の最新ニュースを取得して上書き
     try {
       const newsQuery = encodeURIComponent(`${exactCompanyName} 株式 OR 決算`);
       const newsRes = await fetch(`https://news.google.com/rss/search?q=${newsQuery}&hl=ja&gl=JP&ceid=JP:ja`, {
@@ -213,7 +211,8 @@ app.post('/api/analyze', async (req, res) => {
     return res.json({ success: true, data: parsedData });
   } catch (err) {
     console.error('analyze error', err?.message || err);
-    return res.status(500).json({ error: '分析に失敗しました' });
+    // 画面側にエラーを送信する
+    return res.status(500).json({ error: err.message || '分析に失敗しました。もう一度お試しください。' });
   }
 });
 
