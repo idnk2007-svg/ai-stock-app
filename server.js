@@ -97,6 +97,7 @@ app.post('/api/analyze', async (req, res) => {
     ・「companyName」には、必ず「${exactCompanyName}」を入れてください。
     ・「tickerCode」は必ず "${ticker}" としてください。
     ・財務割安度（PER/PBR等から見た買い時度）を0〜100（0=割高/売り、100=割安/買い）で「fundamentalScore」として評価し、その状態を「fundamentalLabel」としてください。
+    ・チャートのテクニカル的なトレンドを0〜100（0=強い下落トレンド、100=強い上昇トレンド）で「technicalScore」として評価し、その状態を「technicalLabel」としてください。
     ・分析結果は必ず以下のJSON形式で出力してください。
     {
       "companyName": "${exactCompanyName}",
@@ -108,6 +109,8 @@ app.post('/api/analyze', async (req, res) => {
       "tradingSignalLabel": "中立",
       "fundamentalScore": 50,
       "fundamentalLabel": "適正水準",
+      "technicalScore": 50,
+      "technicalLabel": "中立",
       "volatilityIndex": 50,
       "volatilityLabel": "普通",
       "industryGrowthIndex": 50,
