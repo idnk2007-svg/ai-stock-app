@@ -89,7 +89,7 @@ app.post('/api/analyze', async (req, res) => {
     console.warn("Kabutan fetch error", e);
   }
 
-  // ★新機能：AIに分析させる前に、Yahooファイナンスから実際の財務指標と株価を取得しておく
+  // ★Yahooファイナンスから実際の財務指標と株価を取得
   let realFundamentalsText = "データなし";
   let realPriceData = null;
   let rawFundamentals = { per: "-", pbr: "-", yield: "-" };
@@ -122,6 +122,7 @@ app.post('/api/analyze', async (req, res) => {
   }
 
   try {
+    // ★AIの「サボり」を許さない、超強力なプロンプトに変更
     const promptText = `
     日本の証券コード「${ticker}」の企業（${exactCompanyName}）について分析してください。
     
@@ -129,12 +130,14 @@ app.post('/api/analyze', async (req, res) => {
     ${realFundamentalsText}
     ※AI自身の過去の記憶やイメージに頼らず、必ず上記の実際の財務データ（PER、PBRなど）を基準にして、現在の株価が割高か割安かを論理的かつ客観的に評価してください。
     
-    【極めて重要なルール】
-    ・「companyName」には、必ず「${exactCompanyName}」を入れてください。
-    ・「tickerCode」は必ず "${ticker}" としてください。
-    ・財務割安度（上記のPER/PBR等から見た買い時度）を0〜100（0=割高/売り、100=割安/買い）で「fundamentalScore」として評価し、その状態を「fundamentalLabel」としてください。
-    ・チャートのテクニカル的なトレンドを0〜100（0=強い下落トレンド、100=強い上昇トレンド）で「technicalScore」として評価し、その状態を「technicalLabel」としてください。
-    ・「fundamentals」の項目には、提供した実際のPER、PBR、配当利回りの数値をそのまま出力し、それぞれの評価（割安・適正・割高など）を付与してください。
+    【極めて重要なルール：必ず守ること】
+    1. 「companyName」には、必ず「${exactCompanyName}」を入れてください。
+    2. 「tickerCode」は必ず "${ticker}" としてください。
+    3. ★★★スコアの計算について（最重要）★★★
+       以下のJSONのお手本にある「50」という数字は、単なる仮の数字（ダミー）です。絶対にそのまま丸写ししないでください。
+       「tradingSignal」「fundamentalScore」「technicalScore」「volatilityIndex」「industryGrowthIndex」の5つの数値は、必ずあなたの分析結果に基づく【0〜100の整数】にそれぞれ書き換えて出力してください。（例：PERが60倍で極めて割高なら、fundamentalScoreは10など）
+    4. 「fundamentals」の項目には、提供した実際の数値をそのまま出力し、評価（割安・適正・割高など）を付与してください。
+    
     ・分析結果は必ず以下のJSON形式で出力してください。
     {
       "companyName": "${exactCompanyName}",
@@ -152,7 +155,7 @@ app.post('/api/analyze', async (req, res) => {
       "volatilityLabel": "普通",
       "industryGrowthIndex": 50,
       "industryGrowthLabel": "安定",
-      "news": [{"title": "関連ニュース", "url": "#", "source": "メディア名"}],
+      "news": [],
       "fundamentals": {"per": "${rawFundamentals.per}", "perEvaluation": "適正", "pbr": "${rawFundamentals.pbr}", "pbrEvaluation": "適正", "dividendYield": "${rawFundamentals.yield}", "yieldEvaluation": "適正"},
       "analysis": "企業の現状と上記の財務データを踏まえた今後の動向を詳しく分析してください。",
       "riskFactor": "投資リスクや懸念事項を記載してください。"
@@ -170,7 +173,7 @@ app.post('/api/analyze', async (req, res) => {
         parsedData.isPositive = diff >= 0;
     }
 
-    // ★新機能：Googleニュースから本物の最新ニュースを取得して上書き
+    // ★Googleニュースから本物の最新ニュースを取得して上書き
     try {
       const newsQuery = encodeURIComponent(`${exactCompanyName} 株式 OR 決算`);
       const newsRes = await fetch(`https://news.google.com/rss/search?q=${newsQuery}&hl=ja&gl=JP&ceid=JP:ja`, {
@@ -178,10 +181,9 @@ app.post('/api/analyze', async (req, res) => {
       });
       if (newsRes.ok) {
         const rssText = await newsRes.text();
-        // XMLの中から<item>ブロックを抜き出す
         const items = rssText.match(/<item>[\s\S]*?<\/item>/g) || [];
         const realNews = [];
-        for (let i = 0; i < Math.min(4, items.length); i++) { // 最新4件を取得
+        for (let i = 0; i < Math.min(4, items.length); i++) {
           const item = items[i];
           const titleMatch = item.match(/<title>(.*?)<\/title>/);
           const linkMatch = item.match(/<link>(.*?)<\/link>/);
@@ -189,7 +191,7 @@ app.post('/api/analyze', async (req, res) => {
           
           if (titleMatch && linkMatch) {
             let title = titleMatch[1].replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1'); 
-            title = title.replace(/ - [^-]+$/, ''); // メディア名をタイトルから除去
+            title = title.replace(/ - [^-]+$/, '');
             realNews.push({
               title: title,
               url: linkMatch[1],
@@ -198,7 +200,6 @@ app.post('/api/analyze', async (req, res) => {
           }
         }
         if (realNews.length > 0) {
-          // AIが作ったデタラメなニュースを、Googleから取得した本物に上書き！
           parsedData.news = realNews; 
         }
       }
@@ -230,7 +231,6 @@ app.post('/api/search-code', async (req, res) => {
   }
 
   try {
-    // 1. AIに関連企業をピックアップさせる
     const prompt = `「${query}」に関連する日本の上場企業の証券コード(4桁の英数字)を最大5つ、JSONで教えてください。出力例: {"codes": ["7203", "6758"]}`;
     const aiResp = await chatJSON(prompt);
     
@@ -239,7 +239,6 @@ app.post('/api/search-code', async (req, res) => {
         candidates = aiResp.codes.map(c => String(c).replace(/[^0-9A-Z]/gi, '').toUpperCase());
     }
 
-    // 2. ピックアップした企業が本当に「上場しているか」株探にアクセスして検証する
     let verifiedResults = [];
     const uniqueCodes = new Set();
 
@@ -248,14 +247,12 @@ app.post('/api/search-code', async (req, res) => {
         uniqueCodes.add(code);
         
         try {
-            // 人間になりすましてアクセス
             const kabutanRes = await fetch(`https://kabutan.jp/stock/?code=${code}`, {
                 headers: { 'User-Agent': USER_AGENT }
             });
             if (kabutanRes.ok) {
                 const html = await kabutanRes.text();
                 const titleMatch = html.match(/<title>(.*?)【/);
-                // エラーページ（非上場企業など）でなければリストに追加
                 if (titleMatch && titleMatch[1]) {
                     const name = titleMatch[1].trim();
                     if (!name.includes('エラー') && !name.includes('見つかりません')) {
