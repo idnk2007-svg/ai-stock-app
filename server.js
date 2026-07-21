@@ -43,7 +43,7 @@ async function chatJSON(prompt, model = 'llama-3.3-70b-versatile') {
         { role: 'user', content: prompt }
       ],
       model,
-      temperature: 0.7,
+      temperature: 0.7, // AIが手抜き（常に50を出す等）しないように少し高めに設定
       response_format: { type: 'json_object' },
     });
     const raw = resp?.choices?.[0]?.message?.content;
@@ -75,6 +75,7 @@ app.post('/api/analyze', async (req, res) => {
   let backupPrice = null;
   let backupFundamentals = { per: "-", pbr: "-", yield: "-" };
 
+  // ① 株探（バックアップ用データ）から株価とPER/PBRを強制スクレイピング
   try {
     const kabutanRes = await fetch(`https://kabutan.jp/stock/?code=${ticker}`, { 
         headers: { 'User-Agent': USER_AGENT } 
@@ -89,41 +90,39 @@ app.post('/api/analyze', async (req, res) => {
       const pMatch = html.match(/class="stock_price"[^>]*>([0-9,.]+)</) || html.match(/>([0-9,.]+)円</);
       if (pMatch) backupPrice = parseFloat(pMatch[1].replace(/,/g, ''));
       
-      // ★ 最強のテーブル解析：株探の表組み（HTMLタグ）から確実にPBRなどを引っこ抜く
-      const tableMatch = html.match(/<table class="stock_info_tb"[^>]*>([\s\S]*?)<\/table>/i);
-      if (tableMatch) {
-        const tds = tableMatch[1].match(/<td[^>]*>([\s\S]*?)<\/td>/gi);
-        if (tds && tds.length >= 3) {
-          const extractVal = (str) => {
-            const m = str.replace(/<[^>]+>/g, '').match(/([0-9,.]+)/);
-            return m ? m[1] : "-";
-          };
-          const p1 = extractVal(tds[0]);
-          const p2 = extractVal(tds[1]);
-          const p3 = extractVal(tds[2]);
-          if (p1 !== "-") backupFundamentals.per = p1;
-          if (p2 !== "-") backupFundamentals.pbr = p2;
-          if (p3 !== "-") backupFundamentals.yield = p3 + "%";
-        }
-      }
+      // ★ 最強のテキスト解析（PER/PBR混同バグを完全解消）
+      // HTMLタグを全て消して、文字の羅列から順番通りに抜き取る
+      const plainText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
       
-      // 万が一テーブルが見つからなかった場合の、テキスト全検索（最終防衛線）
-      if (backupFundamentals.pbr === "-") {
-         const plainText = html.replace(/<[^>]+>/g, ' ');
-         const pbrM = plainText.match(/PBR[\s\S]{0,30}?([0-9,.]+)\s*倍/i);
-         if (pbrM) backupFundamentals.pbr = pbrM[1];
-         
-         const perM = plainText.match(/PER[\s\S]{0,30}?([0-9,.]+)\s*倍/i);
-         if (perM) backupFundamentals.per = perM[1];
-         
-         const yldM = plainText.match(/利回り[\s\S]{0,30}?([0-9,.]+)\s*[％%]/i);
-         if (yldM) backupFundamentals.yield = yldM[1] + "%";
+      // 例: "PER PBR 利回り 信用倍率 単位 11.4 倍 0.86 倍 3.45 %"
+      const comboMatch = plainText.match(/PER\s+PBR\s+利回り.*?([0-9,.-]+)\s*倍\s+([0-9,.-]+)\s*倍\s+([0-9,.-]+)\s*%/i);
+      
+      if (comboMatch) {
+          if (comboMatch[1] && comboMatch[1] !== "-") backupFundamentals.per = comboMatch[1];
+          if (comboMatch[2] && comboMatch[2] !== "-") backupFundamentals.pbr = comboMatch[2];
+          if (comboMatch[3] && comboMatch[3] !== "-") backupFundamentals.yield = comboMatch[3] + "%";
+      } else {
+          // もしレイアウトが違った場合の従来のテーブル検索
+          const tableMatch = html.match(/<table class="stock_info_tb"[^>]*>([\s\S]*?)<\/table>/i);
+          if (tableMatch) {
+              const tds = tableMatch[1].match(/<td[^>]*>([\s\S]*?)<\/td>/gi);
+              if (tds && tds.length >= 3) {
+                  const ext = (s) => (s.replace(/<[^>]+>/g, '').match(/([0-9,.-]+)/) || [])[1] || "-";
+                  const p1 = ext(tds[0]);
+                  const p2 = ext(tds[1]);
+                  const p3 = ext(tds[2]);
+                  if (p1 !== "-") backupFundamentals.per = p1;
+                  if (p2 !== "-") backupFundamentals.pbr = p2;
+                  if (p3 !== "-") backupFundamentals.yield = p3 + "%";
+              }
+          }
       }
     }
   } catch (e) {
     console.warn("Kabutan fetch error");
   }
 
+  // ② Yahooファイナンスからリアルタイム株価（チャート用）を取得
   let realPriceData = null;
   const fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(ticker) ? `${ticker}.T` : ticker;
 
@@ -149,6 +148,7 @@ app.post('/api/analyze', async (req, res) => {
       realPriceData = { price: backupPrice, prev: backupPrice };
   }
 
+  // ③ YahooファイナンスからリアルタイムPER/PBRを取得し、株探データと合体
   let rawFundamentals = { 
       per: backupFundamentals.per, 
       pbr: backupFundamentals.pbr, 
@@ -163,6 +163,7 @@ app.post('/api/analyze', async (req, res) => {
         const quoteJson = await quoteRes.json();
         const qResult = quoteJson?.quoteResponse?.result?.[0];
         if (qResult) {
+            // Yahooにデータが存在する場合だけ、株探のデータを上書きする（良いとこ取り）
             if (qResult.trailingPE) rawFundamentals.per = qResult.trailingPE.toFixed(2);
             if (qResult.priceToBook) rawFundamentals.pbr = qResult.priceToBook.toFixed(2);
             const divRaw = qResult.dividendYield || qResult.trailingAnnualDividendYield;
@@ -175,6 +176,7 @@ app.post('/api/analyze', async (req, res) => {
 
   const realFundamentalsText = `PER: ${rawFundamentals.per}倍, PBR: ${rawFundamentals.pbr}倍, 配当利回り: ${rawFundamentals.yield}`;
 
+  // ④ 取得した完璧なデータをAIに渡して分析させる
   try {
     const promptText = `
     日本の証券コード「${ticker}」の企業（${exactCompanyName}）について分析してください。
@@ -185,10 +187,10 @@ app.post('/api/analyze', async (req, res) => {
     ・財務データ: ${realFundamentalsText}
     
     【極めて重要なルール】
-    1. 各種指数は、必ず【0〜100の整数】であなた自身が論理的に計算してください。「50」という手抜き数字は禁止です。
+    1. 各種指数は、必ず【0〜100の整数】であなた自身が論理的に計算してください。「50」や「42」という手抜き数字は禁止です。
     ・tradingSignal: 売買シグナル総合
-    ・fundamentalScore: PER/PBRから見た割安度（PERが低く割安なら高め）
-    ・technicalScore: 現在の株価と前日終値のトレンド（上昇なら高め）
+    ・fundamentalScore: 財務データ（PERやPBR）から見た割安度（PERが低く割安なら100に近い）
+    ・technicalScore: 現在の株価と前日終値から見たチャートのトレンド（上昇なら100に近い）
     ・volatilityIndex: 価格変動リスク
     ・industryGrowthIndex: 業界の将来性
     
@@ -196,10 +198,10 @@ app.post('/api/analyze', async (req, res) => {
     {
       "tradingSignal": 62,
       "tradingSignalLabel": "買い",
-      "fundamentalScore": 45,
-      "fundamentalLabel": "やや割高",
-      "technicalScore": 55,
-      "technicalLabel": "中立",
+      "fundamentalScore": 80,
+      "fundamentalLabel": "割安水準",
+      "technicalScore": 75,
+      "technicalLabel": "上昇トレンド",
       "volatilityIndex": 60,
       "volatilityLabel": "やや高リスク",
       "industryGrowthIndex": 70,
@@ -220,18 +222,18 @@ app.post('/api/analyze', async (req, res) => {
         throw new Error('AIがデータの生成に失敗しました。');
     }
 
-    const toNum = (val, defaultVal) => {
+    const toNum = (val) => {
         let n = parseInt(val, 10);
-        return isNaN(n) ? defaultVal : Math.max(0, Math.min(100, n));
+        return isNaN(n) ? null : Math.max(0, Math.min(100, n));
     };
 
-    parsedData.tradingSignal = parsedData.tradingSignal !== undefined ? toNum(parsedData.tradingSignal, 50) : 50;
-    parsedData.fundamentalScore = parsedData.fundamentalScore !== undefined ? toNum(parsedData.fundamentalScore, 50) : 50;
-    parsedData.technicalScore = parsedData.technicalScore !== undefined ? toNum(parsedData.technicalScore, 50) : 50;
-    parsedData.volatilityIndex = parsedData.volatilityIndex !== undefined ? toNum(parsedData.volatilityIndex, 50) : 50;
-    parsedData.industryGrowthIndex = parsedData.industryGrowthIndex !== undefined ? toNum(parsedData.industryGrowthIndex, 50) : 50;
+    parsedData.tradingSignal = toNum(parsedData.tradingSignal) ?? 50;
+    parsedData.fundamentalScore = toNum(parsedData.fundamentalScore) ?? 50;
+    parsedData.technicalScore = toNum(parsedData.technicalScore) ?? 50;
+    parsedData.volatilityIndex = toNum(parsedData.volatilityIndex) ?? 50;
+    parsedData.industryGrowthIndex = toNum(parsedData.industryGrowthIndex) ?? 50;
 
-    // サーバーが確実に取得した数値を上書き（AIの手抜きを許さない）
+    // AIが勝手に数値を消してしまった場合に備え、サーバー側の数値を強制的に上書き
     if (!parsedData.fundamentals) parsedData.fundamentals = {};
     parsedData.fundamentals.per = rawFundamentals.per;
     parsedData.fundamentals.pbr = rawFundamentals.pbr;
