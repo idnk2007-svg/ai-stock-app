@@ -43,7 +43,7 @@ async function chatJSON(prompt, model = 'llama-3.3-70b-versatile') {
         { role: 'user', content: prompt }
       ],
       model,
-      temperature: 0.7, // AIが手抜きせず、少し柔軟に考えるように調整
+      temperature: 0.7,
       response_format: { type: 'json_object' },
     });
     const raw = resp?.choices?.[0]?.message?.content;
@@ -75,7 +75,6 @@ app.post('/api/analyze', async (req, res) => {
   let backupPrice = null;
   let backupFundamentals = { per: "-", pbr: "-", yield: "-" };
 
-  // 【手段1】まず株探から正確な社名とバックアップデータを取得
   try {
     const kabutanRes = await fetch(`https://kabutan.jp/stock/?code=${ticker}`, { 
         headers: { 'User-Agent': USER_AGENT } 
@@ -90,13 +89,36 @@ app.post('/api/analyze', async (req, res) => {
       const pMatch = html.match(/class="stock_price"[^>]*>([0-9,.]+)</) || html.match(/>([0-9,.]+)円</);
       if (pMatch) backupPrice = parseFloat(pMatch[1].replace(/,/g, ''));
       
-      const perM = html.match(/PER<\/th>\s*<td[^>]*>\s*([0-9,.]+)/i) || html.match(/PER.*?([0-9,.]+)倍/i);
-      const pbrM = html.match(/PBR<\/th>\s*<td[^>]*>\s*([0-9,.]+)/i) || html.match(/PBR.*?([0-9,.]+)倍/i);
-      const yldM = html.match(/利回り<\/th>\s*<td[^>]*>\s*([0-9,.]+)/i) || html.match(/利回り.*?([0-9,.]+)[%％]/i);
+      // ★ 最強のテーブル解析：株探の表組み（HTMLタグ）から確実にPBRなどを引っこ抜く
+      const tableMatch = html.match(/<table class="stock_info_tb"[^>]*>([\s\S]*?)<\/table>/i);
+      if (tableMatch) {
+        const tds = tableMatch[1].match(/<td[^>]*>([\s\S]*?)<\/td>/gi);
+        if (tds && tds.length >= 3) {
+          const extractVal = (str) => {
+            const m = str.replace(/<[^>]+>/g, '').match(/([0-9,.]+)/);
+            return m ? m[1] : "-";
+          };
+          const p1 = extractVal(tds[0]);
+          const p2 = extractVal(tds[1]);
+          const p3 = extractVal(tds[2]);
+          if (p1 !== "-") backupFundamentals.per = p1;
+          if (p2 !== "-") backupFundamentals.pbr = p2;
+          if (p3 !== "-") backupFundamentals.yield = p3 + "%";
+        }
+      }
       
-      if (perM) backupFundamentals.per = perM[1];
-      if (pbrM) backupFundamentals.pbr = pbrM[1];
-      if (yldM) backupFundamentals.yield = yldM[1] + "%";
+      // 万が一テーブルが見つからなかった場合の、テキスト全検索（最終防衛線）
+      if (backupFundamentals.pbr === "-") {
+         const plainText = html.replace(/<[^>]+>/g, ' ');
+         const pbrM = plainText.match(/PBR[\s\S]{0,30}?([0-9,.]+)\s*倍/i);
+         if (pbrM) backupFundamentals.pbr = pbrM[1];
+         
+         const perM = plainText.match(/PER[\s\S]{0,30}?([0-9,.]+)\s*倍/i);
+         if (perM) backupFundamentals.per = perM[1];
+         
+         const yldM = plainText.match(/利回り[\s\S]{0,30}?([0-9,.]+)\s*[％%]/i);
+         if (yldM) backupFundamentals.yield = yldM[1] + "%";
+      }
     }
   } catch (e) {
     console.warn("Kabutan fetch error");
@@ -105,7 +127,6 @@ app.post('/api/analyze', async (req, res) => {
   let realPriceData = null;
   const fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(ticker) ? `${ticker}.T` : ticker;
 
-  // 【手段2】Yahoo v8 で本物の株価を取得
   try {
     const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${fetchSymbol}?interval=1d`, { 
         headers: { 'User-Agent': USER_AGENT } 
@@ -128,14 +149,12 @@ app.post('/api/analyze', async (req, res) => {
       realPriceData = { price: backupPrice, prev: backupPrice };
   }
 
-  // ★ここが修正ポイント：株探のデータをベースにして、Yahooで取れたものだけ上書き合体する！
   let rawFundamentals = { 
       per: backupFundamentals.per, 
       pbr: backupFundamentals.pbr, 
       yield: backupFundamentals.yield 
   };
   
-  // 【手段3】Yahoo v7 で本物の数値を上書き
   try {
     const quoteRes = await fetch(`https://query2.finance.yahoo.com/v7/finance/quote?symbols=${fetchSymbol}`, { 
         headers: { 'User-Agent': USER_AGENT } 
@@ -198,7 +217,7 @@ app.post('/api/analyze', async (req, res) => {
     const parsedData = await chatJSON(promptText);
 
     if (!parsedData || Object.keys(parsedData).length === 0) {
-        throw new Error('AIがデータの生成に失敗しました。もう一度「分析」ボタンを押してください。');
+        throw new Error('AIがデータの生成に失敗しました。');
     }
 
     const toNum = (val, defaultVal) => {
@@ -212,10 +231,8 @@ app.post('/api/analyze', async (req, res) => {
     parsedData.volatilityIndex = parsedData.volatilityIndex !== undefined ? toNum(parsedData.volatilityIndex, 50) : 50;
     parsedData.industryGrowthIndex = parsedData.industryGrowthIndex !== undefined ? toNum(parsedData.industryGrowthIndex, 50) : 50;
 
-    if (!parsedData.fundamentals) {
-        parsedData.fundamentals = {};
-    }
     // サーバーが確実に取得した数値を上書き（AIの手抜きを許さない）
+    if (!parsedData.fundamentals) parsedData.fundamentals = {};
     parsedData.fundamentals.per = rawFundamentals.per;
     parsedData.fundamentals.pbr = rawFundamentals.pbr;
     parsedData.fundamentals.dividendYield = rawFundamentals.yield;
