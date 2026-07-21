@@ -108,6 +108,24 @@
                     </div>
                 </div>
 
+                <!-- ★ここに追加：ファンダメンタルズメーター -->
+                <div class="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
+                    <h3 class="text-xs font-bold text-slate-400 mb-4 uppercase tracking-wider">財務割安度 (ファンダメンタルズ)</h3>
+                    <div class="flex justify-between items-end mb-2">
+                        <span id="fundamentalLabel" class="text-xl font-bold text-slate-300">---</span>
+                        <span id="fundamentalValue" class="text-3xl font-bold text-white">--</span>
+                    </div>
+                    <div class="relative h-4 bg-slate-900 rounded-full overflow-hidden border border-slate-700 shadow-inner">
+                        <div class="absolute inset-0 bg-gradient-to-r from-red-500 via-yellow-500 to-emerald-500 opacity-80"></div>
+                        <div id="fundamentalPointer" class="absolute top-0 bottom-0 w-1.5 bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)] transition-all duration-1000 ease-out" style="left: 50%;"></div>
+                    </div>
+                    <div class="flex justify-between text-[10px] text-slate-500 font-medium mt-1">
+                        <span>0 (割高・売り)</span>
+                        <span>50 (適正)</span>
+                        <span>100 (割安・買い)</span>
+                    </div>
+                </div>
+
                 <div class="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
                     <h3 class="text-xs font-bold text-slate-400 mb-4 uppercase tracking-wider">価格変動リスク (ボラティリティ)</h3>
                     <div class="flex justify-between items-end mb-2">
@@ -258,7 +276,7 @@
                         `;
                         // 候補をクリックしたら、メインの検索窓に入力して自動で分析スタート
                         btn.onclick = () => {
-                            searchInput.value = item.code;
+                            searchInput.value = `${item.name} ${item.code}`;
                             codeSearchArea.classList.add('hidden');
                             searchForm.dispatchEvent(new Event('submit'));
                         };
@@ -382,16 +400,16 @@
             document.getElementById('signalLabel').textContent = data.tradingSignalLabel;
             document.getElementById('signalPointer').style.left = `${data.tradingSignal}%`;
 
+            // ★ここに追加：ファンダメンタルズの値をメーターに反映
+            document.getElementById('fundamentalValue').textContent = data.fundamentalScore || 50;
+            document.getElementById('fundamentalLabel').textContent = data.fundamentalLabel || '---';
+            document.getElementById('fundamentalPointer').style.left = `${data.fundamentalScore || 50}%`;
+
             document.getElementById('volatilityValue').textContent = data.volatilityIndex;
             document.getElementById('volatilityLabel').textContent = data.volatilityLabel;
             document.getElementById('volatilityPointer').style.left = `${data.volatilityIndex}%`;
 
-            document.getElementById('growthValue').textContent = data.industryGrowthIndex;
-            document.getElementById('growthLabel').textContent = data.industryGrowthLabel;
-            document.getElementById('growthPointer').style.left = `${data.industryGrowthIndex}%`;
-
-            const getEvalColorClass = (evalText, type) => {
-                if (evalText === '割安' || (type === 'yield' && evalText === '高い')) return 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+            // Industry Growth Indicator
                 if (evalText === '割高' || (type === 'yield' && evalText === '低い')) return 'bg-red-500/20 text-red-400 border border-red-500/30';
                 if (evalText === '適正') return 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30';
                 return 'bg-slate-700 text-slate-300 border border-transparent';
