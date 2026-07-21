@@ -17,7 +17,7 @@ const groq = new OpenAI({
 const cache = new Map();
 const CACHE_DURATION = 1000 * 60 * 60 * 12; // 12時間
 
-// ★最強の突破口：「普通のChromeブラウザ」のフリをしてアクセスブロックを回避する
+// ★普通のChromeブラウザのフリをしてアクセスブロックを回避する
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 function safeParse(content) {
@@ -73,13 +73,11 @@ app.post('/api/analyze', async (req, res) => {
   let exactCompanyName = query; 
   
   try {
-    // ブロック回避のため、ヘッダーにUSER_AGENTを設定
     const kabutanRes = await fetch(`https://kabutan.jp/stock/?code=${ticker}`, { 
         headers: { 'User-Agent': USER_AGENT } 
     });
     if (kabutanRes.ok) {
       const html = await kabutanRes.text();
-      // 株探のタイトルタグから正式名称だけを抜き取る
       const titleMatch = html.match(/<title>(.*?)【/);
       if (titleMatch && titleMatch[1] && !titleMatch[1].includes('エラー')) {
         exactCompanyName = titleMatch[1].trim();
@@ -122,7 +120,7 @@ app.post('/api/analyze', async (req, res) => {
   }
 
   try {
-    // ★AIの「サボり」を許さない、超強力なプロンプトに変更
+    // ★AIの「手抜き」を許さない、バラバラなサンプル数字を指定
     const promptText = `
     日本の証券コード「${ticker}」の企業（${exactCompanyName}）について分析してください。
     
@@ -134,8 +132,8 @@ app.post('/api/analyze', async (req, res) => {
     1. 「companyName」には、必ず「${exactCompanyName}」を入れてください。
     2. 「tickerCode」は必ず "${ticker}" としてください。
     3. ★★★スコアの計算について（最重要）★★★
-       以下のJSONのお手本にある「50」という数字は、単なる仮の数字（ダミー）です。絶対にそのまま丸写ししないでください。
-       「tradingSignal」「fundamentalScore」「technicalScore」「volatilityIndex」「industryGrowthIndex」の5つの数値は、必ずあなたの分析結果に基づく【0〜100の整数】にそれぞれ書き換えて出力してください。（例：PERが60倍で極めて割高なら、fundamentalScoreは10など）
+       以下のJSONのお手本にある数値（例: 42, 15, 68など）は、単なるフォーマット例です。絶対にそのまま丸写ししないでください。
+       「tradingSignal」「fundamentalScore」「technicalScore」「volatilityIndex」「industryGrowthIndex」の5つの数値は、必ず【対象企業の実際のデータ（PERやチャート等）】に基づいて、あなたが独自に判断した【0〜100の整数】で算出して出力してください。（例：PERが60倍で極めて割高なら、fundamentalScoreは10や0にするなど）
     4. 「fundamentals」の項目には、提供した実際の数値をそのまま出力し、評価（割安・適正・割高など）を付与してください。
     
     ・分析結果は必ず以下のJSON形式で出力してください。
@@ -145,18 +143,18 @@ app.post('/api/analyze', async (req, res) => {
       "currentPrice": 0,
       "changeText": "0 (0%)",
       "isPositive": true,
-      "tradingSignal": 50,
-      "tradingSignalLabel": "中立",
-      "fundamentalScore": 50,
-      "fundamentalLabel": "適正水準",
-      "technicalScore": 50,
-      "technicalLabel": "中立",
-      "volatilityIndex": 50,
-      "volatilityLabel": "普通",
-      "industryGrowthIndex": 50,
-      "industryGrowthLabel": "安定",
+      "tradingSignal": 42,
+      "tradingSignalLabel": "やや売り",
+      "fundamentalScore": 15,
+      "fundamentalLabel": "割高",
+      "technicalScore": 68,
+      "technicalLabel": "上昇トレンド",
+      "volatilityIndex": 85,
+      "volatilityLabel": "高リスク",
+      "industryGrowthIndex": 70,
+      "industryGrowthLabel": "成長期待",
       "news": [],
-      "fundamentals": {"per": "${rawFundamentals.per}", "perEvaluation": "適正", "pbr": "${rawFundamentals.pbr}", "pbrEvaluation": "適正", "dividendYield": "${rawFundamentals.yield}", "yieldEvaluation": "適正"},
+      "fundamentals": {"per": "${rawFundamentals.per}", "perEvaluation": "割高", "pbr": "${rawFundamentals.pbr}", "pbrEvaluation": "適正", "dividendYield": "${rawFundamentals.yield}", "yieldEvaluation": "低い"},
       "analysis": "企業の現状と上記の財務データを踏まえた今後の動向を詳しく分析してください。",
       "riskFactor": "投資リスクや懸念事項を記載してください。"
     }`;
@@ -207,7 +205,6 @@ app.post('/api/analyze', async (req, res) => {
       console.warn('News fetch error', e);
     }
 
-    // AIの勘違いを防ぐための絶対防衛ライン
     parsedData.tickerCode = ticker;
     if (exactCompanyName) {
         parsedData.companyName = exactCompanyName; 
