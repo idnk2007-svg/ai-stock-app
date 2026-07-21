@@ -108,7 +108,7 @@
                     </div>
                 </div>
 
-                <!-- ★ここに追加：ファンダメンタルズメーター -->
+                <!-- ★財務割安度メーター -->
                 <div class="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
                     <h3 class="text-xs font-bold text-slate-400 mb-4 uppercase tracking-wider">財務割安度 (ファンダメンタルズ)</h3>
                     <div class="flex justify-between items-end mb-2">
@@ -123,6 +123,24 @@
                         <span>0 (割高・売り)</span>
                         <span>50 (適正)</span>
                         <span>100 (割安・買い)</span>
+                    </div>
+                </div>
+
+                <!-- ★チャートトレンドメーター -->
+                <div class="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
+                    <h3 class="text-xs font-bold text-slate-400 mb-4 uppercase tracking-wider">チャートトレンド (テクニカル)</h3>
+                    <div class="flex justify-between items-end mb-2">
+                        <span id="technicalLabel" class="text-xl font-bold text-slate-300">---</span>
+                        <span id="technicalValue" class="text-3xl font-bold text-white">--</span>
+                    </div>
+                    <div class="relative h-4 bg-slate-900 rounded-full overflow-hidden border border-slate-700 shadow-inner">
+                        <div class="absolute inset-0 bg-gradient-to-r from-red-500 via-yellow-500 to-emerald-500 opacity-80"></div>
+                        <div id="technicalPointer" class="absolute top-0 bottom-0 w-1.5 bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)] transition-all duration-1000 ease-out" style="left: 50%;"></div>
+                    </div>
+                    <div class="flex justify-between text-[10px] text-slate-500 font-medium mt-1">
+                        <span>0 (強い下落)</span>
+                        <span>50 (中立)</span>
+                        <span>100 (強い上昇)</span>
                     </div>
                 </div>
 
@@ -400,20 +418,26 @@
             document.getElementById('signalLabel').textContent = data.tradingSignalLabel;
             document.getElementById('signalPointer').style.left = `${data.tradingSignal}%`;
 
-            // ★ここに追加：ファンダメンタルズの値をメーターに反映
+            // ★財務割安度の値をメーターに反映
             document.getElementById('fundamentalValue').textContent = data.fundamentalScore || 50;
             document.getElementById('fundamentalLabel').textContent = data.fundamentalLabel || '---';
             document.getElementById('fundamentalPointer').style.left = `${data.fundamentalScore || 50}%`;
+
+            // ★チャートトレンド（テクニカル）の値をメーターに反映
+            document.getElementById('technicalValue').textContent = data.technicalScore || 50;
+            document.getElementById('technicalLabel').textContent = data.technicalLabel || '---';
+            document.getElementById('technicalPointer').style.left = `${data.technicalScore || 50}%`;
 
             document.getElementById('volatilityValue').textContent = data.volatilityIndex;
             document.getElementById('volatilityLabel').textContent = data.volatilityLabel;
             document.getElementById('volatilityPointer').style.left = `${data.volatilityIndex}%`;
 
-            // Industry Growth Indicator
+            // 業界成長性の値をメーターに反映
             document.getElementById('growthValue').textContent = data.industryGrowthIndex || 50;
             document.getElementById('growthLabel').textContent = data.industryGrowthLabel || '---';
             document.getElementById('growthPointer').style.left = `${data.industryGrowthIndex || 50}%`;
 
+            // ★欠損していた色付け判定プログラム（完全版）
             const getEvalColorClass = (evalText, type) => {
                 if (evalText === '割安' || (type === 'yield' && evalText === '高い')) return 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
                 if (evalText === '割高' || (type === 'yield' && evalText === '低い')) return 'bg-red-500/20 text-red-400 border border-red-500/30';
