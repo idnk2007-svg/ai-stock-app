@@ -136,6 +136,42 @@ app.post('/api/analyze', async (req, res) => {
       console.warn('price fetch failed', e?.message || e);
     }
 
+    // ★新機能：Googleニュースから本物の最新ニュースを取得して上書き
+    try {
+      const newsQuery = encodeURIComponent(`${exactCompanyName} 株式 OR 決算`);
+      const newsRes = await fetch(`https://news.google.com/rss/search?q=${newsQuery}&hl=ja&gl=JP&ceid=JP:ja`, {
+          headers: { 'User-Agent': USER_AGENT }
+      });
+      if (newsRes.ok) {
+        const rssText = await newsRes.text();
+        // XMLの中から<item>ブロックを抜き出す
+        const items = rssText.match(/<item>[\s\S]*?<\/item>/g) || [];
+        const realNews = [];
+        for (let i = 0; i < Math.min(4, items.length); i++) { // 最新4件を取得
+          const item = items[i];
+          const titleMatch = item.match(/<title>(.*?)<\/title>/);
+          const linkMatch = item.match(/<link>(.*?)<\/link>/);
+          const sourceMatch = item.match(/<source.*?>(.*?)<\/source>/);
+          
+          if (titleMatch && linkMatch) {
+            let title = titleMatch[1].replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1'); 
+            title = title.replace(/ - [^-]+$/, ''); // メディア名をタイトルから除去
+            realNews.push({
+              title: title,
+              url: linkMatch[1],
+              source: sourceMatch ? sourceMatch[1] : 'ニュースメディア'
+            });
+          }
+        }
+        if (realNews.length > 0) {
+          // AIが作ったデタラメなニュースを、Googleから取得した本物に上書き！
+          parsedData.news = realNews; 
+        }
+      }
+    } catch (e) {
+      console.warn('News fetch error', e);
+    }
+
     // AIの勘違いを防ぐための絶対防衛ライン
     parsedData.tickerCode = ticker;
     if (exactCompanyName) {
