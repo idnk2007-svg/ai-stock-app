@@ -43,7 +43,7 @@ async function chatJSON(prompt, model = 'llama-3.3-70b-versatile') {
         { role: 'user', content: prompt }
       ],
       model,
-      temperature: 0.6,
+      temperature: 0.7, // AIが手抜きせず、少し柔軟に考えるように調整
       response_format: { type: 'json_object' },
     });
     const raw = resp?.choices?.[0]?.message?.content;
@@ -73,7 +73,7 @@ app.post('/api/analyze', async (req, res) => {
 
   let exactCompanyName = query; 
   let backupPrice = null;
-  let backupFundamentals = null;
+  let backupFundamentals = { per: "-", pbr: "-", yield: "-" };
 
   // 【手段1】まず株探から正確な社名とバックアップデータを取得
   try {
@@ -90,18 +90,13 @@ app.post('/api/analyze', async (req, res) => {
       const pMatch = html.match(/class="stock_price"[^>]*>([0-9,.]+)</) || html.match(/>([0-9,.]+)円</);
       if (pMatch) backupPrice = parseFloat(pMatch[1].replace(/,/g, ''));
       
-      // ★修正：株探のHTML構造に合わせた強力な正規表現でPER・PBR・利回りを確実に抜き取る
-      const perM = html.match(/PER.*?<\/th>\s*<td[^>]*>\s*([0-9,.]+)/i);
-      const pbrM = html.match(/PBR.*?<\/th>\s*<td[^>]*>\s*([0-9,.]+)/i);
-      const yldM = html.match(/利回り.*?<\/th>\s*<td[^>]*>\s*([0-9,.]+)/i);
+      const perM = html.match(/PER<\/th>\s*<td[^>]*>\s*([0-9,.]+)/i) || html.match(/PER.*?([0-9,.]+)倍/i);
+      const pbrM = html.match(/PBR<\/th>\s*<td[^>]*>\s*([0-9,.]+)/i) || html.match(/PBR.*?([0-9,.]+)倍/i);
+      const yldM = html.match(/利回り<\/th>\s*<td[^>]*>\s*([0-9,.]+)/i) || html.match(/利回り.*?([0-9,.]+)[%％]/i);
       
-      if (perM || pbrM || yldM) {
-          backupFundamentals = {
-              per: perM ? perM[1] : "-",
-              pbr: pbrM ? pbrM[1] : "-",
-              yield: yldM ? yldM[1] + "%" : "-"
-          };
-      }
+      if (perM) backupFundamentals.per = perM[1];
+      if (pbrM) backupFundamentals.pbr = pbrM[1];
+      if (yldM) backupFundamentals.yield = yldM[1] + "%";
     }
   } catch (e) {
     console.warn("Kabutan fetch error");
@@ -133,10 +128,14 @@ app.post('/api/analyze', async (req, res) => {
       realPriceData = { price: backupPrice, prev: backupPrice };
   }
 
-  let rawFundamentals = { per: "-", pbr: "-", yield: "-" };
-  let realFundamentalsText = "データなし";
+  // ★ここが修正ポイント：株探のデータをベースにして、Yahooで取れたものだけ上書き合体する！
+  let rawFundamentals = { 
+      per: backupFundamentals.per, 
+      pbr: backupFundamentals.pbr, 
+      yield: backupFundamentals.yield 
+  };
   
-  // 【手段3】Yahoo v7 で本物のPERを取得
+  // 【手段3】Yahoo v7 で本物の数値を上書き
   try {
     const quoteRes = await fetch(`https://query2.finance.yahoo.com/v7/finance/quote?symbols=${fetchSymbol}`, { 
         headers: { 'User-Agent': USER_AGENT } 
@@ -145,23 +144,17 @@ app.post('/api/analyze', async (req, res) => {
         const quoteJson = await quoteRes.json();
         const qResult = quoteJson?.quoteResponse?.result?.[0];
         if (qResult) {
-            const pe = qResult.trailingPE ? qResult.trailingPE.toFixed(2) : '-';
-            const pbr = qResult.priceToBook ? qResult.priceToBook.toFixed(2) : '-';
+            if (qResult.trailingPE) rawFundamentals.per = qResult.trailingPE.toFixed(2);
+            if (qResult.priceToBook) rawFundamentals.pbr = qResult.priceToBook.toFixed(2);
             const divRaw = qResult.dividendYield || qResult.trailingAnnualDividendYield;
-            const divYield = divRaw ? (divRaw * 100).toFixed(2) + '%' : '-';
-            
-            rawFundamentals = { per: pe, pbr: pbr, yield: divYield };
-            realFundamentalsText = `PER: ${pe}倍, PBR: ${pbr}倍, 配当利回り: ${divYield}`;
+            if (divRaw) rawFundamentals.yield = (divRaw * 100).toFixed(2) + '%';
         }
     }
   } catch(e) {
     console.warn('Yahoo v7 quote fetch error');
   }
 
-  if (realFundamentalsText === "データなし" && backupFundamentals) {
-      rawFundamentals = backupFundamentals;
-      realFundamentalsText = `PER: ${rawFundamentals.per}倍, PBR: ${rawFundamentals.pbr}倍, 配当利回り: ${rawFundamentals.yield}`;
-  }
+  const realFundamentalsText = `PER: ${rawFundamentals.per}倍, PBR: ${rawFundamentals.pbr}倍, 配当利回り: ${rawFundamentals.yield}`;
 
   try {
     const promptText = `
@@ -173,12 +166,12 @@ app.post('/api/analyze', async (req, res) => {
     ・財務データ: ${realFundamentalsText}
     
     【極めて重要なルール】
-    1. 各種指数（Score / Index）は、必ず【0〜100の整数】であなた自身が論理的に計算してください。「50」という手抜き数字は禁止です。
-    ・tradingSignal: 売買シグナル総合（買い時なら高め）
-    ・fundamentalScore: PER/PBRから見た割安度（PERが低く割安なら高め、割高なら低め）
+    1. 各種指数は、必ず【0〜100の整数】であなた自身が論理的に計算してください。「50」という手抜き数字は禁止です。
+    ・tradingSignal: 売買シグナル総合
+    ・fundamentalScore: PER/PBRから見た割安度（PERが低く割安なら高め）
     ・technicalScore: 現在の株価と前日終値のトレンド（上昇なら高め）
-    ・volatilityIndex: 価格変動リスク（高リスクなら高め）
-    ・industryGrowthIndex: 業界の将来性（成長するなら高め）
+    ・volatilityIndex: 価格変動リスク
+    ・industryGrowthIndex: 業界の将来性
     
     【出力JSON形式（必ずこの形を守ること）】
     {
@@ -219,10 +212,10 @@ app.post('/api/analyze', async (req, res) => {
     parsedData.volatilityIndex = parsedData.volatilityIndex !== undefined ? toNum(parsedData.volatilityIndex, 50) : 50;
     parsedData.industryGrowthIndex = parsedData.industryGrowthIndex !== undefined ? toNum(parsedData.industryGrowthIndex, 50) : 50;
 
-    // ★修正：AIが無視した場合でも、絶対に実際の数値をねじ込む！
     if (!parsedData.fundamentals) {
         parsedData.fundamentals = {};
     }
+    // サーバーが確実に取得した数値を上書き（AIの手抜きを許さない）
     parsedData.fundamentals.per = rawFundamentals.per;
     parsedData.fundamentals.pbr = rawFundamentals.pbr;
     parsedData.fundamentals.dividendYield = rawFundamentals.yield;
