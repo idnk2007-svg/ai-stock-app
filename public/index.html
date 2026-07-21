@@ -410,6 +410,12 @@
             document.getElementById('volatilityPointer').style.left = `${data.volatilityIndex}%`;
 
             // Industry Growth Indicator
+            document.getElementById('growthValue').textContent = data.industryGrowthIndex || 50;
+            document.getElementById('growthLabel').textContent = data.industryGrowthLabel || '---';
+            document.getElementById('growthPointer').style.left = `${data.industryGrowthIndex || 50}%`;
+
+            const getEvalColorClass = (evalText, type) => {
+                if (evalText === '割安' || (type === 'yield' && evalText === '高い')) return 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
                 if (evalText === '割高' || (type === 'yield' && evalText === '低い')) return 'bg-red-500/20 text-red-400 border border-red-500/30';
                 if (evalText === '適正') return 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30';
                 return 'bg-slate-700 text-slate-300 border border-transparent';
