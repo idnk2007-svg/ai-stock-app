@@ -89,15 +89,52 @@ app.post('/api/analyze', async (req, res) => {
     console.warn("Kabutan fetch error", e);
   }
 
+  // ★新機能：AIに分析させる前に、Yahooファイナンスから実際の財務指標と株価を取得しておく
+  let realFundamentalsText = "データなし";
+  let realPriceData = null;
+  let rawFundamentals = { per: "-", pbr: "-", yield: "-" };
+
+  try {
+    const fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(ticker) ? `${ticker}.T` : ticker;
+    // v7/finance/quote APIを使って、株価だけでなくPERやPBRも一緒に取得
+    const quoteRes = await fetch(`https://query2.finance.yahoo.com/v7/finance/quote?symbols=${fetchSymbol}`, { 
+        headers: { 'User-Agent': USER_AGENT } 
+    });
+    const quoteJson = await quoteRes.json();
+    const qResult = quoteJson?.quoteResponse?.result?.[0];
+    
+    if (qResult) {
+      const pe = qResult.trailingPE ? qResult.trailingPE.toFixed(2) : '-';
+      const pbr = qResult.priceToBook ? qResult.priceToBook.toFixed(2) : '-';
+      const divRaw = qResult.dividendYield || qResult.trailingAnnualDividendYield;
+      const divYield = divRaw ? (divRaw * 100).toFixed(2) + '%' : '-';
+      
+      rawFundamentals = { per: pe, pbr: pbr, yield: divYield };
+      realFundamentalsText = `PER: ${pe}倍, PBR: ${pbr}倍, 配当利回り: ${divYield}`;
+      
+      realPriceData = {
+        price: qResult.regularMarketPrice,
+        prev: qResult.regularMarketPreviousClose
+      };
+    }
+  } catch(e) {
+    console.warn('Yahoo quote fetch error', e);
+  }
+
   try {
     const promptText = `
     日本の証券コード「${ticker}」の企業（${exactCompanyName}）について分析してください。
     
+    【現在の実際の財務データ（非常に重要）】
+    ${realFundamentalsText}
+    ※AI自身の過去の記憶やイメージに頼らず、必ず上記の実際の財務データ（PER、PBRなど）を基準にして、現在の株価が割高か割安かを論理的かつ客観的に評価してください。
+    
     【極めて重要なルール】
     ・「companyName」には、必ず「${exactCompanyName}」を入れてください。
     ・「tickerCode」は必ず "${ticker}" としてください。
-    ・財務割安度（PER/PBR等から見た買い時度）を0〜100（0=割高/売り、100=割安/買い）で「fundamentalScore」として評価し、その状態を「fundamentalLabel」としてください。
+    ・財務割安度（上記のPER/PBR等から見た買い時度）を0〜100（0=割高/売り、100=割安/買い）で「fundamentalScore」として評価し、その状態を「fundamentalLabel」としてください。
     ・チャートのテクニカル的なトレンドを0〜100（0=強い下落トレンド、100=強い上昇トレンド）で「technicalScore」として評価し、その状態を「technicalLabel」としてください。
+    ・「fundamentals」の項目には、提供した実際のPER、PBR、配当利回りの数値をそのまま出力し、それぞれの評価（割安・適正・割高など）を付与してください。
     ・分析結果は必ず以下のJSON形式で出力してください。
     {
       "companyName": "${exactCompanyName}",
@@ -116,30 +153,21 @@ app.post('/api/analyze', async (req, res) => {
       "industryGrowthIndex": 50,
       "industryGrowthLabel": "安定",
       "news": [{"title": "関連ニュース", "url": "#", "source": "メディア名"}],
-      "fundamentals": {"per": "-", "perEvaluation": "適正", "pbr": "-", "pbrEvaluation": "適正", "dividendYield": "-", "yieldEvaluation": "適正"},
-      "analysis": "企業の現状と今後の動向を詳しく分析してください。",
+      "fundamentals": {"per": "${rawFundamentals.per}", "perEvaluation": "適正", "pbr": "${rawFundamentals.pbr}", "pbrEvaluation": "適正", "dividendYield": "${rawFundamentals.yield}", "yieldEvaluation": "適正"},
+      "analysis": "企業の現状と上記の財務データを踏まえた今後の動向を詳しく分析してください。",
       "riskFactor": "投資リスクや懸念事項を記載してください。"
     }`;
 
     const parsedData = await chatJSON(promptText) || {};
 
-    try {
-      const fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(ticker) ? `${ticker}.T` : ticker;
-      const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${fetchSymbol}`, { 
-          headers: { 'User-Agent': USER_AGENT } 
-      });
-      const priceData = await priceRes.json();
-      const meta = priceData?.chart?.result?.[0]?.meta;
-      if (meta?.regularMarketPrice) {
-        parsedData.currentPrice = meta.regularMarketPrice;
-        const prev = meta.chartPreviousClose || meta.regularMarketPreviousClose || meta.regularMarketPrice;
-        const diff = meta.regularMarketPrice - prev;
+    // 取得しておいた実際の株価データで上書き
+    if (realPriceData && realPriceData.price) {
+        parsedData.currentPrice = realPriceData.price;
+        const prev = realPriceData.prev || realPriceData.price;
+        const diff = realPriceData.price - prev;
         const percent = prev ? (diff / prev) * 100 : 0;
         parsedData.changeText = `${diff >= 0 ? '+' : ''}${diff.toFixed(1)} (${percent.toFixed(2)}%)`;
         parsedData.isPositive = diff >= 0;
-      }
-    } catch (e) {
-      console.warn('price fetch failed', e?.message || e);
     }
 
     // ★新機能：Googleニュースから本物の最新ニュースを取得して上書き
