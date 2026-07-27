@@ -73,9 +73,8 @@ app.post('/api/analyze', async (req, res) => {
 
   let exactCompanyName = query; 
   let backupPrice = null;
-  let backupFundamentals = { per: "-", pbr: "-", yield: "-" };
 
-  // 【1】株探からの強力スクレイピング（最新版）
+  // 【1】株探からのスクレイピング（不安定な指標取得を完全削除し、名前と株価のみ取得）
   try {
     const kabutanRes = await fetch(`https://kabutan.jp/stock/?code=${ticker}`, { 
         headers: { 'User-Agent': USER_AGENT } 
@@ -89,17 +88,6 @@ app.post('/api/analyze', async (req, res) => {
       
       const pMatch = html.match(/class="stock_price"[^>]*>([0-9,.]+)</) || html.match(/>([0-9,.]+)円</);
       if (pMatch) backupPrice = parseFloat(pMatch[1].replace(/,/g, ''));
-      
-      // PER, PBR, 利回りが横に並んでいるテーブルブロックを丸ごとキャッチして順番に抽出
-      const tableMatch = html.match(/PER[\s\S]*?信用倍率[\s\S]*?単位[\s\S]*?<\/tr>[\s\S]*?<tr>([\s\S]*?)<\/tr>/i);
-      if (tableMatch && tableMatch[1]) {
-          const vals = tableMatch[1].match(/>\s*([0-9,.-]+)\s*(倍|%|％)/g);
-          if (vals && vals.length >= 3) {
-              backupFundamentals.per = vals[0].replace(/[^0-9,.-]/g, '');
-              backupFundamentals.pbr = vals[1].replace(/[^0-9,.-]/g, '');
-              backupFundamentals.yield = vals[2].replace(/[^0-9,.-]/g, '') + '%';
-          }
-      }
     }
   } catch (e) {
     console.warn("Kabutan fetch error");
@@ -131,34 +119,7 @@ app.post('/api/analyze', async (req, res) => {
       realPriceData = { price: backupPrice, prev: backupPrice };
   }
 
-  // 【3】株探のデータをベースにして、Yahooのデータで上書きする
-  let rawFundamentals = { 
-      per: backupFundamentals.per, 
-      pbr: backupFundamentals.pbr, 
-      yield: backupFundamentals.yield 
-  };
-  
-  try {
-    const quoteRes = await fetch(`https://query2.finance.yahoo.com/v7/finance/quote?symbols=${fetchSymbol}`, { 
-        headers: { 'User-Agent': USER_AGENT } 
-    });
-    if (quoteRes.ok) {
-        const quoteJson = await quoteRes.json();
-        const qResult = quoteJson?.quoteResponse?.result?.[0];
-        if (qResult) {
-            if (qResult.trailingPE) rawFundamentals.per = qResult.trailingPE.toFixed(2);
-            if (qResult.priceToBook) rawFundamentals.pbr = qResult.priceToBook.toFixed(2);
-            const divRaw = qResult.dividendYield || qResult.trailingAnnualDividendYield;
-            if (divRaw) rawFundamentals.yield = (divRaw * 100).toFixed(2) + '%';
-        }
-    }
-  } catch(e) {
-    console.warn('Yahoo v7 quote fetch error');
-  }
-
-  const realFundamentalsText = `PER: ${rawFundamentals.per}倍, PBR: ${rawFundamentals.pbr}倍, 配当利回り: ${rawFundamentals.yield}`;
-
-  // 【4】AIに分析させる
+  // 【3】AIに分析させる（シンプル化）
   try {
     const promptText = `
     あなたはプロの証券アナリストAIです。日本の証券コード「${ticker}」の企業（${exactCompanyName}）について分析してください。
@@ -166,10 +127,9 @@ app.post('/api/analyze', async (req, res) => {
     【現在の市場データ】
     ・現在の株価: ${realPriceData ? realPriceData.price : '不明'} 円
     ・前日終値: ${realPriceData ? realPriceData.prev : '不明'} 円
-    ・財務データ: ${realFundamentalsText}
     
     【厳守するルール】
-    各指数は、渡されたデータに基づいてあなたが論理的に計算した【0〜100の整数】を必ず入れてください。
+    各指数は、渡されたデータとあなたの知識に基づいて論理的に計算した【0〜100の整数】を必ず入れてください。
     ※出力例の数字（77）は単なるダミーです。絶対にそのまま出力せず、必ず自分で計算した数字に置き換えること！
     
     【出力JSON形式】
@@ -184,11 +144,6 @@ app.post('/api/analyze', async (req, res) => {
       "volatilityLabel": "高リスク",
       "industryGrowthIndex": 77,
       "industryGrowthLabel": "成長期待",
-      "fundamentals": {
-        "perEvaluation": "割安",
-        "pbrEvaluation": "適正",
-        "yieldEvaluation": "低い"
-      },
       "analysis": "具体的な分析コメント",
       "riskFactor": "懸念事項"
     }
@@ -223,14 +178,6 @@ app.post('/api/analyze', async (req, res) => {
     parsedData.technicalScore = tes;
     parsedData.volatilityIndex = vi;
     parsedData.industryGrowthIndex = igi;
-
-    if (!parsedData.fundamentals) parsedData.fundamentals = {};
-    parsedData.fundamentals.per = rawFundamentals.per;
-    parsedData.fundamentals.pbr = rawFundamentals.pbr;
-    parsedData.fundamentals.dividendYield = rawFundamentals.yield;
-    parsedData.fundamentals.perEvaluation = parsedData.fundamentals.perEvaluation || "不明";
-    parsedData.fundamentals.pbrEvaluation = parsedData.fundamentals.pbrEvaluation || "不明";
-    parsedData.fundamentals.yieldEvaluation = parsedData.fundamentals.yieldEvaluation || "不明";
 
     parsedData.tickerCode = ticker;
     if (exactCompanyName) parsedData.companyName = exactCompanyName; 
