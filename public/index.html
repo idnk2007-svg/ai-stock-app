@@ -178,28 +178,6 @@
                         <span>100 (急成長)</span>
                     </div>
                 </div>
-
-                <!-- 主要指標 -->
-                <div class="bg-slate-800 p-5 rounded-2xl shadow-lg border border-slate-700">
-                    <h3 class="text-xs font-bold text-slate-400 mb-3 uppercase tracking-wider">主要指標 (参考値)</h3>
-                    <div class="grid grid-cols-3 gap-2 text-center divide-x divide-slate-700">
-                        <div class="flex flex-col items-center">
-                            <p class="text-xs text-slate-500 mb-1">PER</p>
-                            <p id="fundPer" class="text-base font-semibold text-white mb-2">---</p>
-                            <span id="fundPerEval" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-300">---</span>
-                        </div>
-                        <div class="flex flex-col items-center">
-                            <p class="text-xs text-slate-500 mb-1">PBR</p>
-                            <p id="fundPbr" class="text-base font-semibold text-white mb-2">---</p>
-                            <span id="fundPbrEval" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-300">---</span>
-                        </div>
-                        <div class="flex flex-col items-center">
-                            <p class="text-xs text-slate-500 mb-1">配当利回り</p>
-                            <p id="fundYield" class="text-base font-semibold text-white mb-2">---</p>
-                            <span id="fundYieldEval" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-300">---</span>
-                        </div>
-                    </div>
-                </div>
             </div>
 
             <div class="lg:col-span-2 space-y-6">
@@ -425,32 +403,9 @@
             document.getElementById('volatilityLabel').textContent = data.volatilityLabel || '---';
             document.getElementById('volatilityPointer').style.left = `${data.volatilityIndex ?? 50}%`;
 
-            document.getElementById('growthValue').textContent = data.industryGrowthIndex ?? 50;
+            document.getElementById('growthValue').textContent = data.industryGrowthIndex;
             document.getElementById('growthLabel').textContent = data.industryGrowthLabel || '---';
-            document.getElementById('growthPointer').style.left = `${data.industryGrowthIndex ?? 50}%`;
-
-            // 色付け関数
-            const getEvalColorClass = (evalText, type) => {
-                if (evalText === '割安' || (type === 'yield' && evalText === '高い')) return 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
-                if (evalText === '割高' || (type === 'yield' && evalText === '低い')) return 'bg-red-500/20 text-red-400 border border-red-500/30';
-                if (evalText === '適正') return 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30';
-                return 'bg-slate-700 text-slate-300 border border-transparent';
-            };
-
-            const perEl = document.getElementById('fundPerEval');
-            perEl.textContent = data.fundamentals?.perEvaluation || '-';
-            perEl.className = `text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap transition-colors ${getEvalColorClass(perEl.textContent, 'per')}`;
-            document.getElementById('fundPer').textContent = data.fundamentals?.per || '---';
-            
-            const pbrEl = document.getElementById('fundPbrEval');
-            pbrEl.textContent = data.fundamentals?.pbrEvaluation || '-';
-            pbrEl.className = `text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap transition-colors ${getEvalColorClass(pbrEl.textContent, 'pbr')}`;
-            document.getElementById('fundPbr').textContent = data.fundamentals?.pbr || '---';
-
-            const yieldEl = document.getElementById('fundYieldEval');
-            yieldEl.textContent = data.fundamentals?.yieldEvaluation || '-';
-            yieldEl.className = `text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap transition-colors ${getEvalColorClass(yieldEl.textContent, 'yield')}`;
-            document.getElementById('fundYield').textContent = data.fundamentals?.dividendYield || '---';
+            document.getElementById('growthPointer').style.left = `${data.industryGrowthIndex}%`;
 
             document.getElementById('aiAnalysis').textContent = data.analysis;
             document.getElementById('riskFactor').textContent = data.riskFactor || '-';
