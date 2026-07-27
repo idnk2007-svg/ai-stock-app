@@ -43,7 +43,7 @@ async function chatJSON(prompt, model = 'llama-3.3-70b-versatile') {
         { role: 'user', content: prompt }
       ],
       model,
-      temperature: 0.7, // AIが手抜きせず、少し柔軟に考えるように調整
+      temperature: 0.7, 
       response_format: { type: 'json_object' },
     });
     const raw = resp?.choices?.[0]?.message?.content;
@@ -75,7 +75,7 @@ app.post('/api/analyze', async (req, res) => {
   let backupPrice = null;
   let backupFundamentals = { per: "-", pbr: "-", yield: "-" };
 
-  // 【手段1】まず株探から正確な社名とバックアップデータを取得
+  // 【1】株探からの強力スクレイピング（最新版）
   try {
     const kabutanRes = await fetch(`https://kabutan.jp/stock/?code=${ticker}`, { 
         headers: { 'User-Agent': USER_AGENT } 
@@ -90,14 +90,16 @@ app.post('/api/analyze', async (req, res) => {
       const pMatch = html.match(/class="stock_price"[^>]*>([0-9,.]+)</) || html.match(/>([0-9,.]+)円</);
       if (pMatch) backupPrice = parseFloat(pMatch[1].replace(/,/g, ''));
       
-      // ★超・確実なスクレイピング：HTMLの表組みタグをピンポイントで狙い撃ち
-      const perM = html.match(/<th>\s*PER\s*<\/th>\s*<td[^>]*>([0-9,.]+)/i) || html.match(/PER.*?([0-9,.]+)倍/i);
-      const pbrM = html.match(/<th>\s*PBR\s*<\/th>\s*<td[^>]*>([0-9,.]+)/i) || html.match(/PBR.*?([0-9,.]+)倍/i);
-      const yldM = html.match(/<th>\s*利回り\s*<\/th>\s*<td[^>]*>([0-9,.]+)/i) || html.match(/利回り.*?([0-9,.]+)[%％]/i);
-      
-      if (perM) backupFundamentals.per = perM[1];
-      if (pbrM) backupFundamentals.pbr = pbrM[1];
-      if (yldM) backupFundamentals.yield = yldM[1] + "%";
+      // PER, PBR, 利回りが横に並んでいるテーブルブロックを丸ごとキャッチして順番に抽出
+      const tableMatch = html.match(/PER[\s\S]*?信用倍率[\s\S]*?単位[\s\S]*?<\/tr>[\s\S]*?<tr>([\s\S]*?)<\/tr>/i);
+      if (tableMatch && tableMatch[1]) {
+          const vals = tableMatch[1].match(/>\s*([0-9,.-]+)\s*(倍|%|％)/g);
+          if (vals && vals.length >= 3) {
+              backupFundamentals.per = vals[0].replace(/[^0-9,.-]/g, '');
+              backupFundamentals.pbr = vals[1].replace(/[^0-9,.-]/g, '');
+              backupFundamentals.yield = vals[2].replace(/[^0-9,.-]/g, '') + '%';
+          }
+      }
     }
   } catch (e) {
     console.warn("Kabutan fetch error");
@@ -106,7 +108,7 @@ app.post('/api/analyze', async (req, res) => {
   let realPriceData = null;
   const fetchSymbol = /^[0-9][0-9A-Z]{3}$/.test(ticker) ? `${ticker}.T` : ticker;
 
-  // 【手段2】Yahoo v8 で本物の株価を取得
+  // 【2】Yahoo v8 で本物の株価を取得
   try {
     const priceRes = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${fetchSymbol}?interval=1d`, { 
         headers: { 'User-Agent': USER_AGENT } 
@@ -129,14 +131,13 @@ app.post('/api/analyze', async (req, res) => {
       realPriceData = { price: backupPrice, prev: backupPrice };
   }
 
-  // ★株探のデータをベースにして、Yahooで取れたものだけ上書き合体する
+  // 【3】株探のデータをベースにして、Yahooのデータで上書きする
   let rawFundamentals = { 
       per: backupFundamentals.per, 
       pbr: backupFundamentals.pbr, 
       yield: backupFundamentals.yield 
   };
   
-  // 【手段3】Yahoo v7 で本物の数値を上書き
   try {
     const quoteRes = await fetch(`https://query2.finance.yahoo.com/v7/finance/quote?symbols=${fetchSymbol}`, { 
         headers: { 'User-Agent': USER_AGENT } 
@@ -157,67 +158,73 @@ app.post('/api/analyze', async (req, res) => {
 
   const realFundamentalsText = `PER: ${rawFundamentals.per}倍, PBR: ${rawFundamentals.pbr}倍, 配当利回り: ${rawFundamentals.yield}`;
 
+  // 【4】AIに分析させる
   try {
     const promptText = `
-    日本の証券コード「${ticker}」の企業（${exactCompanyName}）について分析してください。
+    あなたはプロの証券アナリストAIです。日本の証券コード「${ticker}」の企業（${exactCompanyName}）について分析してください。
     
-    【現在の市場データ（※極めて重要！この数値を絶対の基準として分析すること）】
+    【現在の市場データ】
     ・現在の株価: ${realPriceData ? realPriceData.price : '不明'} 円
     ・前日終値: ${realPriceData ? realPriceData.prev : '不明'} 円
     ・財務データ: ${realFundamentalsText}
     
-    【極めて重要なルール】
-    1. 各種指数は、必ず【0〜100の整数】であなた自身が論理的に計算してください。「50」という手抜き数字は禁止です。
-    ・tradingSignal: 売買シグナル総合
-    ・fundamentalScore: PER/PBRから見た割安度（PERが低く割安なら高め）
-    ・technicalScore: 現在の株価と前日終値のトレンド（上昇なら高め）
-    ・volatilityIndex: 価格変動リスク
-    ・industryGrowthIndex: 業界の将来性
-    2. fundamentals の評価項目（perEvaluation, pbrEvaluation, yieldEvaluation）は、渡された数値をもとに「割安」「適正」「割高」「高い」「低い」のいずれかで必ず判定してください。
+    【厳守するルール】
+    各指数は、渡されたデータに基づいてあなたが論理的に計算した【0〜100の整数】を必ず入れてください。
+    ※出力例の数字（77）は単なるダミーです。絶対にそのまま出力せず、必ず自分で計算した数字に置き換えること！
     
-    【出力JSON形式（必ずこの形を守ること）】
+    【出力JSON形式】
     {
-      "tradingSignal": 62,
+      "tradingSignal": 77,
       "tradingSignalLabel": "買い",
-      "fundamentalScore": 45,
-      "fundamentalLabel": "やや割高",
-      "technicalScore": 55,
-      "technicalLabel": "中立",
-      "volatilityIndex": 60,
-      "volatilityLabel": "やや高リスク",
-      "industryGrowthIndex": 70,
+      "fundamentalScore": 77,
+      "fundamentalLabel": "割安",
+      "technicalScore": 77,
+      "technicalLabel": "上昇",
+      "volatilityIndex": 77,
+      "volatilityLabel": "高リスク",
+      "industryGrowthIndex": 77,
       "industryGrowthLabel": "成長期待",
       "fundamentals": {
-        "perEvaluation": "割高",
+        "perEvaluation": "割安",
         "pbrEvaluation": "適正",
         "yieldEvaluation": "低い"
       },
-      "analysis": "企業の現状と今後の動向の詳しい分析。",
-      "riskFactor": "投資リスクや懸念事項"
+      "analysis": "具体的な分析コメント",
+      "riskFactor": "懸念事項"
     }
     `;
 
     const parsedData = await chatJSON(promptText);
 
     if (!parsedData || Object.keys(parsedData).length === 0) {
-        throw new Error('AIがデータの生成に失敗しました。もう一度「分析」ボタンを押してください。');
+        throw new Error('AIからの応答が空でした。もう一度お試しください。');
     }
 
-    const toNum = (val, defaultVal) => {
+    // AIが数値を出し忘れた場合や、サボってダミー値(77)を返した場合は厳しくエラーにしてやり直しさせる
+    const toNum = (val) => {
+        if (val === undefined || val === null) return null;
         let n = parseInt(val, 10);
-        return isNaN(n) ? defaultVal : Math.max(0, Math.min(100, n));
+        return isNaN(n) ? null : Math.max(0, Math.min(100, n));
     };
 
-    parsedData.tradingSignal = parsedData.tradingSignal !== undefined ? toNum(parsedData.tradingSignal, 50) : 50;
-    parsedData.fundamentalScore = parsedData.fundamentalScore !== undefined ? toNum(parsedData.fundamentalScore, 50) : 50;
-    parsedData.technicalScore = parsedData.technicalScore !== undefined ? toNum(parsedData.technicalScore, 50) : 50;
-    parsedData.volatilityIndex = parsedData.volatilityIndex !== undefined ? toNum(parsedData.volatilityIndex, 50) : 50;
-    parsedData.industryGrowthIndex = parsedData.industryGrowthIndex !== undefined ? toNum(parsedData.industryGrowthIndex, 50) : 50;
+    const ts = toNum(parsedData.tradingSignal);
+    const fs = toNum(parsedData.fundamentalScore);
+    const tes = toNum(parsedData.technicalScore);
+    const vi = toNum(parsedData.volatilityIndex);
+    const igi = toNum(parsedData.industryGrowthIndex);
 
-    if (!parsedData.fundamentals) {
-        parsedData.fundamentals = {};
+    // 絶対に42や50でごまかさない。サボりはエラーにする！
+    if (ts === null || fs === null || ts === 77 || fs === 77) {
+        throw new Error('AIが指数の計算をサボりました。お手数ですが、もう一度「分析」ボタンを押してください。');
     }
-    // サーバーが確実に取得した数値を上書き（AIの手抜きを許さない）
+
+    parsedData.tradingSignal = ts;
+    parsedData.fundamentalScore = fs;
+    parsedData.technicalScore = tes;
+    parsedData.volatilityIndex = vi;
+    parsedData.industryGrowthIndex = igi;
+
+    if (!parsedData.fundamentals) parsedData.fundamentals = {};
     parsedData.fundamentals.per = rawFundamentals.per;
     parsedData.fundamentals.pbr = rawFundamentals.pbr;
     parsedData.fundamentals.dividendYield = rawFundamentals.yield;
@@ -226,9 +233,7 @@ app.post('/api/analyze', async (req, res) => {
     parsedData.fundamentals.yieldEvaluation = parsedData.fundamentals.yieldEvaluation || "不明";
 
     parsedData.tickerCode = ticker;
-    if (exactCompanyName) {
-        parsedData.companyName = exactCompanyName; 
-    }
+    if (exactCompanyName) parsedData.companyName = exactCompanyName; 
     
     parsedData.currentPrice = realPriceData ? realPriceData.price : 0;
     if (realPriceData && realPriceData.price) {
@@ -242,6 +247,7 @@ app.post('/api/analyze', async (req, res) => {
         parsedData.isPositive = true;
     }
 
+    // Googleニュース取得
     try {
       const newsQuery = encodeURIComponent(`${exactCompanyName} 株式 OR 決算`);
       const newsRes = await fetch(`https://news.google.com/rss/search?q=${newsQuery}&hl=ja&gl=JP&ceid=JP:ja`, {
@@ -267,9 +273,7 @@ app.post('/api/analyze', async (req, res) => {
             });
           }
         }
-        if (realNews.length > 0) {
-          parsedData.news = realNews; 
-        }
+        if (realNews.length > 0) parsedData.news = realNews; 
       }
     } catch (e) {
       console.warn('News fetch error', e);
@@ -278,7 +282,7 @@ app.post('/api/analyze', async (req, res) => {
     return res.json({ success: true, data: parsedData });
   } catch (err) {
     console.error('analyze error', err?.message || err);
-    return res.status(500).json({ error: 'AIが分析データの生成に失敗しました。もう一度お試しください。' });
+    return res.status(500).json({ error: err.message || 'AIが分析データの生成に失敗しました。' });
   }
 });
 
