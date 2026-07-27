@@ -1,4 +1,4 @@
-const express = require('express');
+onst express = require('express');
 const cors = require('cors');
 const { OpenAI } = require('openai');
 
@@ -90,9 +90,10 @@ app.post('/api/analyze', async (req, res) => {
       const pMatch = html.match(/class="stock_price"[^>]*>([0-9,.]+)</) || html.match(/>([0-9,.]+)円</);
       if (pMatch) backupPrice = parseFloat(pMatch[1].replace(/,/g, ''));
       
-      const perM = html.match(/PER<\/th>\s*<td[^>]*>\s*([0-9,.]+)/i) || html.match(/PER.*?([0-9,.]+)倍/i);
-      const pbrM = html.match(/PBR<\/th>\s*<td[^>]*>\s*([0-9,.]+)/i) || html.match(/PBR.*?([0-9,.]+)倍/i);
-      const yldM = html.match(/利回り<\/th>\s*<td[^>]*>\s*([0-9,.]+)/i) || html.match(/利回り.*?([0-9,.]+)[%％]/i);
+      // ★超・確実なスクレイピング：HTMLの表組みタグをピンポイントで狙い撃ち
+      const perM = html.match(/<th>\s*PER\s*<\/th>\s*<td[^>]*>([0-9,.]+)/i) || html.match(/PER.*?([0-9,.]+)倍/i);
+      const pbrM = html.match(/<th>\s*PBR\s*<\/th>\s*<td[^>]*>([0-9,.]+)/i) || html.match(/PBR.*?([0-9,.]+)倍/i);
+      const yldM = html.match(/<th>\s*利回り\s*<\/th>\s*<td[^>]*>([0-9,.]+)/i) || html.match(/利回り.*?([0-9,.]+)[%％]/i);
       
       if (perM) backupFundamentals.per = perM[1];
       if (pbrM) backupFundamentals.pbr = pbrM[1];
@@ -128,7 +129,7 @@ app.post('/api/analyze', async (req, res) => {
       realPriceData = { price: backupPrice, prev: backupPrice };
   }
 
-  // ★ここが修正ポイント：株探のデータをベースにして、Yahooで取れたものだけ上書き合体する！
+  // ★株探のデータをベースにして、Yahooで取れたものだけ上書き合体する
   let rawFundamentals = { 
       per: backupFundamentals.per, 
       pbr: backupFundamentals.pbr, 
@@ -172,6 +173,7 @@ app.post('/api/analyze', async (req, res) => {
     ・technicalScore: 現在の株価と前日終値のトレンド（上昇なら高め）
     ・volatilityIndex: 価格変動リスク
     ・industryGrowthIndex: 業界の将来性
+    2. fundamentals の評価項目（perEvaluation, pbrEvaluation, yieldEvaluation）は、渡された数値をもとに「割安」「適正」「割高」「高い」「低い」のいずれかで必ず判定してください。
     
     【出力JSON形式（必ずこの形を守ること）】
     {
